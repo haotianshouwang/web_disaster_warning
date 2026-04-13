@@ -126,8 +126,10 @@ class CENCEarthquakeWolfxHandler(BaseDataHandler):
             if report_num <= 0:
                 report_num = 1
 
+            source_record_id = str(eq_info.get("md5") or event_id or "").strip()
+
             earthquake = EarthquakeData(
-                id=eq_info.get("md5", ""),
+                id=source_record_id,
                 event_id=event_id,
                 source=DataSource.WOLFX_CENC_EQ,
                 disaster_type=DisasterType.EARTHQUAKE,
