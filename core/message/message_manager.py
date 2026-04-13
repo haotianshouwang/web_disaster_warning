@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
+from aiohttp import ClientSession
 from jinja2 import Template
 
 import astrbot.api.message_components as Comp
@@ -227,6 +228,44 @@ class MessagePushManager:
         self._render_cache_lock = asyncio.Lock()
         self._render_cache_ttl_seconds = 180
 
+        # 远程媒体抓取会话（长生命周期复用，避免频繁创建/销毁连接）
+        self._remote_media_session: ClientSession | None = None
+        self._remote_media_session_timeout_seconds = 15
+
+    async def _get_remote_media_session(
+        self, timeout_seconds: int | None = None
+    ) -> ClientSession:
+        """获取可复用的远程媒体抓取 Session。"""
+        session_timeout_seconds = (
+            timeout_seconds
+            if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0
+            else self._remote_media_session_timeout_seconds
+        )
+
+        if self._remote_media_session and not self._remote_media_session.closed:
+            current_timeout = getattr(
+                self._remote_media_session.timeout, "total", session_timeout_seconds
+            )
+            if current_timeout == session_timeout_seconds:
+                return self._remote_media_session
+
+            try:
+                await self._remote_media_session.close()
+            except Exception as e:
+                logger.debug(f"[灾害预警] 关闭旧远程媒体 Session 失败: {e}")
+            finally:
+                self._remote_media_session = None
+
+        timeout = aiohttp.ClientTimeout(total=session_timeout_seconds)
+        self._remote_media_session = aiohttp.ClientSession(timeout=timeout)
+        return self._remote_media_session
+
+    async def _close_remote_media_session(self) -> None:
+        """关闭远程媒体抓取 Session。"""
+        if self._remote_media_session and not self._remote_media_session.closed:
+            await self._remote_media_session.close()
+        self._remote_media_session = None
+
     @staticmethod
     def _is_http_url(url: str | None) -> bool:
         """判断是否为可抓取的 HTTP(S) URL。"""
@@ -261,7 +300,6 @@ class MessagePushManager:
     ) -> dict[str, Any] | None:
         """抓取远程媒体并返回结构化结果。"""
         normalized_url = url.strip()
-        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
         result: dict[str, Any] = {
             "source_url": normalized_url,
             "final_url": normalized_url,
@@ -274,48 +312,44 @@ class MessagePushManager:
         }
 
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(
-                    normalized_url, allow_redirects=True
-                ) as response:
-                    result["status"] = response.status
-                    result["final_url"] = str(response.url)
-                    result["content_type"] = response.headers.get("Content-Type")
-                    content_length = response.headers.get("Content-Length")
-                    if content_length and content_length.isdigit():
-                        result["content_length"] = int(content_length)
-                        if result["content_length"] > max_bytes:
-                            result["error"] = (
-                                f"响应体过大: {result['content_length']} bytes > {max_bytes} bytes"
-                            )
-                            return result
-
-                    if response.status != 200:
-                        result["error"] = f"HTTP {response.status}"
-                        return result
-
-                    body = await response.read()
-                    result["bytes"] = len(body)
-                    if len(body) > max_bytes:
+            session = await self._get_remote_media_session(timeout_seconds)
+            async with session.get(normalized_url, allow_redirects=True) as response:
+                result["status"] = response.status
+                result["final_url"] = str(response.url)
+                result["content_type"] = response.headers.get("Content-Type")
+                content_length = response.headers.get("Content-Length")
+                if content_length and content_length.isdigit():
+                    result["content_length"] = int(content_length)
+                    if result["content_length"] > max_bytes:
                         result["error"] = (
-                            f"下载体过大: {len(body)} bytes > {max_bytes} bytes"
+                            f"响应体过大: {result['content_length']} bytes > {max_bytes} bytes"
                         )
                         return result
 
-                    content_type = result[
-                        "content_type"
-                    ] or self._guess_image_content_type(result["final_url"])
-                    result["content_type"] = content_type
-                    if expected_kind == "image" and not self._is_image_content_type(
-                        content_type
-                    ):
-                        result["error"] = (
-                            f"响应类型不是图片: {content_type or 'unknown'}"
-                        )
-                        return result
-
-                    result["data"] = body
+                if response.status != 200:
+                    result["error"] = f"HTTP {response.status}"
                     return result
+
+                body = await response.read()
+                result["bytes"] = len(body)
+                if len(body) > max_bytes:
+                    result["error"] = (
+                        f"下载体过大: {len(body)} bytes > {max_bytes} bytes"
+                    )
+                    return result
+
+                content_type = result["content_type"] or self._guess_image_content_type(
+                    result["final_url"]
+                )
+                result["content_type"] = content_type
+                if expected_kind == "image" and not self._is_image_content_type(
+                    content_type
+                ):
+                    result["error"] = f"响应类型不是图片: {content_type or 'unknown'}"
+                    return result
+
+                result["data"] = body
+                return result
         except Exception as e:
             result["error"] = str(e)
             result["exception_type"] = type(e).__name__
@@ -2030,7 +2064,13 @@ class MessagePushManager:
         return success_count
 
     async def cleanup_browser(self):
-        """清理浏览器资源"""
+        """清理浏览器与远程媒体抓取资源"""
+        try:
+            await self._close_remote_media_session()
+            logger.debug("[灾害预警] 远程媒体 Session 已关闭")
+        except Exception as e:
+            logger.error(f"[灾害预警] 关闭远程媒体 Session 失败: {e}")
+
         if self.browser_manager:
             try:
                 await self.browser_manager.close()
