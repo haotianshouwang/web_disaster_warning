@@ -160,10 +160,18 @@ function AppProvider({ children }) {
     }, [state.theme]);
 
     // 封装刷新数据的函数
+    const unwrapApiResponse = React.useCallback((payload) => {
+        if (payload && typeof payload === 'object' && payload.success === true && payload.data !== undefined) {
+            return payload.data;
+        }
+        return payload;
+    }, []);
+
     const refreshData = React.useCallback(() => {
         return fetch('/api/status')
             .then(res => res.json())
-            .then(data => {
+            .then(payload => {
+                const data = unwrapApiResponse(payload);
                 const statusUpdate = {
                     running: data.running,
                     activeConnections: data.active_connections,
@@ -191,13 +199,14 @@ function AppProvider({ children }) {
                 console.error('Failed to fetch status:', err);
                 throw err;
             });
-    }, []);
+    }, [unwrapApiResponse]);
 
     // 获取连接状态（包括延迟）
     const fetchConnections = React.useCallback(() => {
         return fetch('/api/connections')
             .then(res => res.json())
-            .then(data => {
+            .then(payload => {
+                const data = unwrapApiResponse(payload);
                 if (data.connections) {
                     dispatch({ type: 'UPDATE_CONNECTIONS', payload: data.connections });
                 }
@@ -207,13 +216,14 @@ function AppProvider({ children }) {
                 console.error('Failed to fetch connections:', err);
                 throw err;
             });
-    }, []);
+    }, [unwrapApiResponse]);
 
     // 获取配置信息（包括时区）
     const fetchConfig = React.useCallback(() => {
         return fetch('/api/config')
             .then(res => res.json())
-            .then(data => {
+            .then(payload => {
+                const data = unwrapApiResponse(payload);
                 if (data.display_timezone) {
                     dispatch({
                         type: 'UPDATE_CONFIG',
@@ -226,7 +236,22 @@ function AppProvider({ children }) {
                 console.error('Failed to fetch config:', err);
                 throw err;
             });
-    }, []);
+    }, [unwrapApiResponse]);
+
+    // 获取统计信息（图表、跑马灯、最近事件等）
+    const fetchStatistics = React.useCallback(() => {
+        return fetch('/api/statistics')
+            .then(res => res.json())
+            .then(payload => {
+                const data = unwrapApiResponse(payload);
+                dispatch({ type: 'UPDATE_STATS', payload: data || {} });
+                return data;
+            })
+            .catch(err => {
+                console.error('Failed to fetch statistics:', err);
+                throw err;
+            });
+    }, [unwrapApiResponse]);
 
     // 初始化时延迟加载数据，优先渲染UI框架
     useEffect(() => {
@@ -235,10 +260,11 @@ function AppProvider({ children }) {
             refreshData();
             fetchConfig();
             fetchConnections(); // 加载连接状态（包括延迟信息）
+            fetchStatistics();
         }, 0);
         
         return () => clearTimeout(timer);
-    }, [refreshData, fetchConfig, fetchConnections]);
+    }, [refreshData, fetchConfig, fetchConnections, fetchStatistics]);
 
     // 运行时长计时器
     // 每秒更新一次 uptime 显示，格式化为 天/小时/分/秒
@@ -272,7 +298,7 @@ function AppProvider({ children }) {
     }, [state.status.startTime, state.status.running]);
 
     return (
-        <AppContext.Provider value={{ state, dispatch, refreshData, fetchConnections, fetchConfig }}>
+        <AppContext.Provider value={{ state, dispatch, refreshData, fetchConnections, fetchConfig, fetchStatistics }}>
             {children}
         </AppContext.Provider>
     );
