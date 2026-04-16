@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 
+import astrbot.api.message_components as Comp
 from astrbot.api import logger
 
 from ...core.app.services.query_helpers import quoted_plain_result
@@ -71,53 +73,169 @@ class PluginAdminCommandService:
             uptime = status.get("uptime", "未知")
             plugin_version = get_plugin_version()
 
-            status_text = [
-                "📊 灾害预警服务状态\n",
-                "\n",
-                f"🔧 插件版本：{plugin_version}\n",
-                f"🔄 运行状态：{running_state} (已运行 {uptime})\n",
-                f"🔗 活跃连接：{status['active_websocket_connections']} / {status['total_connections']}\n",
+            bot_id = event.get_self_id() or "0"
+            bot_name = "灾害预警"
+
+            connection_label_map = OrderedDict(
+                [
+                    ("fan_studio_all", "FAN Studio"),
+                    ("p2p_main", "P2P地震情報"),
+                    ("wolfx_all", "Wolfx"),
+                    ("global_quake", "Global Quake"),
+                ]
+            )
+            source_group_label_map = OrderedDict(
+                [
+                    ("fan_studio", "FAN Studio"),
+                    ("p2p_earthquake", "P2P地震情報"),
+                    ("wolfx", "Wolfx"),
+                    ("global_quake", "Global Quake"),
+                ]
+            )
+            source_label_map = {
+                "china": "中国地震预警网",
+                "china_pr": "中国地震预警网（省级）",
+                "japan": "日本气象厅",
+                "taiwan": "台湾中央气象署",
+                "weather": "中国气象局",
+                "earthquake": "中国地震台网",
+                "usgs": "USGS",
+                "eew": "紧急地震速报",
+                "earthquake_info": "地震情报",
+                "global_quake": "Global Quake",
+            }
+            scoped_sub_source_label_map = {
+                "FAN Studio": {
+                    "china_earthquake_warning": "中国地震预警网 (CEA)",
+                    "china_earthquake_warning_provincial": "中国地震预警网 (省级)",
+                    "taiwan_cwa_earthquake": "台湾中央气象署: 强震即时警报",
+                    "taiwan_cwa_report": "台湾中央气象署: 地震报告",
+                    "china_cenc_earthquake": "中国地震台网 (CENC)",
+                    "usgs_earthquake": "美国地质调查局 (USGS)",
+                    "china_weather_alarm": "中国气象局: 气象预警",
+                    "china_tsunami": "自然资源部海啸预警中心",
+                    "japan_jma_eew": "日本气象厅: 紧急地震速报",
+                },
+                "P2P地震情報": {
+                    "japan_jma_eew": "日本气象厅: 紧急地震速报",
+                    "japan_jma_earthquake": "日本气象厅: 地震情报",
+                    "japan_jma_tsunami": "日本气象厅: 海啸予报",
+                },
+                "Wolfx": {
+                    "japan_jma_eew": "日本气象厅: 紧急地震速报",
+                    "china_cenc_eew": "中国地震预警网 (CEA)",
+                    "taiwan_cwa_eew": "台湾中央气象署: 强震即时警报",
+                    "japan_jma_earthquake": "日本气象厅地震情报",
+                    "china_cenc_earthquake": "中国地震台网地震测定",
+                },
+                "Global Quake": {
+                    "enabled": "实时数据流",
+                },
+            }
+
+            def _build_forward_nodes(blocks: list[str]) -> Comp.Nodes | None:
+                if not blocks:
+                    return None
+                nodes = Comp.Nodes([])
+                for idx, block in enumerate(blocks):
+                    content = [Comp.Plain(block)]
+                    if idx == 0:
+                        content = self.plugin._with_quote_reply(event, content)
+                    nodes.nodes.append(
+                        Comp.Node(uin=bot_id, name=bot_name, content=content)
+                    )
+                return nodes
+
+            def _map_sub_source_name(group_display_name: str, raw_key: str) -> str:
+                normalized_key = str(raw_key or "").strip()
+                if not normalized_key:
+                    return normalized_key
+                scoped_map = scoped_sub_source_label_map.get(group_display_name, {})
+                return scoped_map.get(
+                    normalized_key,
+                    source_label_map.get(normalized_key, normalized_key),
+                )
+
+            overview_lines = [
+                "📊 灾害预警服务状态",
+                "",
+                f"🔧 插件版本：{plugin_version}",
+                f"🔄 运行状态：{running_state} (已运行 {uptime})",
+                f"🔗 活跃连接：{status['active_websocket_connections']} / {status['total_connections']}",
             ]
 
+            connection_lines = ["📡 连接详情"]
             conn_details = status.get("connection_details", {})
-            if conn_details:
-                status_text.append("\n")
-                status_text.append("📡 连接详情：\n")
-                for name, detail in conn_details.items():
-                    state_icon = "🟢" if detail.get("connected") else "🔴"
-                    uri = detail.get("uri", "未知地址")
-                    if len(uri) > 30:
-                        uri = uri[:27] + "..."
-                    retry = detail.get("retry_count", 0)
-                    retry_text = f" (重试: {retry})" if retry > 0 else ""
-                    status_text.append(f"  {state_icon} `{name}`: {uri}{retry_text}\n")
+            for conn_name, display_name in connection_label_map.items():
+                detail = conn_details.get(conn_name, {})
+                connected = bool(detail.get("connected", False))
+                state_text = "🟢 正常" if connected else "🔴 异常"
+                connection_lines.append(f"• {display_name}：{state_text}")
 
+            data_source_lines = ["📚 子数据源启用状况"]
             active_sources = status.get("data_sources", [])
-            if active_sources:
-                status_text.append("\n")
-                status_text.append("📡 数据源详情：\n")
-                service_groups: dict[str, list[str]] = {}
-                for source in active_sources:
-                    parts = source.split(".", 1)
-                    service = parts[0]
-                    name = parts[1] if len(parts) > 1 else source
-                    service_groups.setdefault(service, []).append(name)
+            grouped_sources: dict[str, list[str]] = {}
+            for source in active_sources:
+                service_name, _, source_name = source.partition(".")
+                grouped_sources.setdefault(service_name, [])
+                if source_name:
+                    grouped_sources[service_name].append(source_name)
 
-                service_names = {
-                    "fan_studio": "FAN Studio",
-                    "p2p_earthquake": "P2P地震情报",
-                    "wolfx": "Wolfx",
-                    "global_quake": "Global Quake",
-                }
-                for service, sources in service_groups.items():
-                    display_name = service_names.get(service, service)
-                    sources_str = ", ".join(sources)
-                    status_text.append(f"  • {display_name}: {sources_str}\n")
+            sub_source_status = status.get("sub_source_status", {})
+            for service_name, display_name in source_group_label_map.items():
+                if (
+                    service_name not in grouped_sources
+                    and service_name not in sub_source_status
+                ):
+                    continue
 
-            yield event.plain_result("".join(status_text))
+                raw_sources = grouped_sources.get(service_name, [])
+                if raw_sources:
+                    enabled_count = len(raw_sources)
+                    total_count = 0
+                    group_status = sub_source_status.get(service_name, {})
+                    if isinstance(group_status, dict) and group_status:
+                        total_count = len(group_status)
+                    suffix = (
+                        f"（已启用 {enabled_count}/{total_count}）"
+                        if total_count > 0
+                        else f"（已启用 {enabled_count} 项）"
+                    )
+                    data_source_lines.append(f"• {display_name}{suffix}")
+                else:
+                    data_source_lines.append(f"• {display_name}：已启用")
+
+                group_status = sub_source_status.get(service_name, {})
+                if isinstance(group_status, dict) and group_status:
+                    sorted_items = sorted(
+                        group_status.items(),
+                        key=lambda item: (
+                            not bool(item[1]),
+                            _map_sub_source_name(display_name, item[0]),
+                        ),
+                    )
+                    for raw_key, enabled in sorted_items:
+                        sub_name = _map_sub_source_name(display_name, raw_key)
+                        state_icon = "🟢" if enabled else "⚪"
+                        data_source_lines.append(f"  {state_icon} {sub_name}")
+
+            nodes = _build_forward_nodes(
+                [
+                    "\n".join(overview_lines),
+                    "\n".join(connection_lines),
+                    "\n".join(data_source_lines),
+                ]
+            )
+            if nodes:
+                yield event.chain_result([nodes])
+                return
+
+            yield quoted_plain_result(self.plugin, event, "\n".join(overview_lines))
         except Exception as e:
             logger.error(f"[灾害预警] 获取服务状态失败: {e}")
-            yield event.plain_result(f"❌ 获取服务状态失败: {str(e)}")
+            yield quoted_plain_result(
+                self.plugin, event, f"❌ 获取服务状态失败: {str(e)}"
+            )
 
     async def handle_disaster_stats(self, event):
         def _quoted_plain_result(text: str):

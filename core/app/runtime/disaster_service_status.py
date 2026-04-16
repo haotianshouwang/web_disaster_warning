@@ -115,14 +115,21 @@ class DisasterServiceStatusService:
         data_sources = self.service.config.get("data_sources", {})
         for service_name, service_config in data_sources.items():
             # 这里的“活跃”定义为配置层已启用，不代表当前连接一定在线。
-            if isinstance(service_config, dict) and service_config.get(
-                "enabled", False
+            if not (
+                isinstance(service_config, dict)
+                and service_config.get("enabled", False)
             ):
-                for source_name, enabled in service_config.items():
-                    if (
-                        source_name != "enabled"
-                        and isinstance(enabled, bool)
-                        and enabled
-                    ):
-                        active_sources.append(f"{service_name}.{source_name}")
+                continue
+
+            enabled_children = [
+                source_name
+                for source_name, enabled in service_config.items()
+                if source_name != "enabled" and isinstance(enabled, bool) and enabled
+            ]
+            if enabled_children:
+                active_sources.extend(
+                    f"{service_name}.{source_name}" for source_name in enabled_children
+                )
+            else:
+                active_sources.append(service_name)
         return active_sources
