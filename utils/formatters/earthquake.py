@@ -8,6 +8,7 @@ from datetime import datetime
 
 from ...core.support.intensity_calculator import IntensityCalculator
 from ...models.models import EarthquakeData
+from ..converters import ScaleConverter
 from ..time_converter import TimeConverter
 from .base import BaseMessageFormatter
 
@@ -274,8 +275,11 @@ class CWAEEWFormatter(BaseMessageFormatter):
 
         # 预估最大震度
         if earthquake.scale is not None:
+            scale_display = ScaleConverter.format_jma_cwa_scale_display(
+                earthquake.scale
+            )
             emoji = _get_intensity_emoji(earthquake.scale, is_eew=True, is_shindo=True)
-            scale_line = f"💥预估最大震度：{earthquake.scale} {emoji}"
+            scale_line = f"💥预估最大震度：{scale_display} {emoji}"
 
             # CWA 融合策略：尝试将 Wolfx 影响区域追加到预估震度后
             wolfx_impact_area = None
@@ -435,14 +439,20 @@ class JMAEEWFormatter(BaseMessageFormatter):
         # 预估最大震度
         # Fan Studio 使用 intensity (epiIntensity)，P2P 使用 scale
         if earthquake.scale is not None:
+            scale_display = ScaleConverter.format_jma_cwa_scale_display(
+                earthquake.scale
+            )
             emoji = _get_intensity_emoji(earthquake.scale, is_eew=True, is_shindo=True)
-            lines.append(f"💥预估最大震度：{earthquake.scale} {emoji}")
+            lines.append(f"💥预估最大震度：{scale_display} {emoji}")
         elif earthquake.intensity is not None:
             # Fan Studio 数据中的 epiIntensity 已经是震度字符串 (e.g. "4", "5+")
+            intensity_display = ScaleConverter.format_jma_cwa_scale_display(
+                earthquake.intensity
+            )
             emoji = _get_intensity_emoji(
                 earthquake.intensity, is_eew=True, is_shindo=True
             )
-            lines.append(f"💥预估最大震度：{earthquake.intensity} {emoji}")
+            lines.append(f"💥预估最大震度：{intensity_display} {emoji}")
 
         # 警报区域详情 (仅针对警报且有区域数据)
         raw_data = getattr(earthquake, "raw_data", {})
@@ -662,8 +672,11 @@ class JMAEarthquakeFormatter(BaseMessageFormatter):
 
         # 最大震度
         if earthquake.scale is not None:
+            scale_display = ScaleConverter.format_jma_cwa_scale_display(
+                earthquake.scale
+            )
             emoji = _get_intensity_emoji(earthquake.scale, is_eew=False, is_shindo=True)
-            lines.append(f"💥最大震度：{earthquake.scale} {emoji}")
+            lines.append(f"💥最大震度：{scale_display} {emoji}")
 
         # 津波信息
         if earthquake.domestic_tsunami:
@@ -697,16 +710,7 @@ class JMAEarthquakeFormatter(BaseMessageFormatter):
 
                 # 震度显示辅助函数
                 def get_scale_disp(scale_val):
-                    disp = str(scale_val / 10).replace(".0", "")
-                    if scale_val == 45:
-                        return "5弱"
-                    elif scale_val == 50:
-                        return "5强"
-                    elif scale_val == 55:
-                        return "6弱"
-                    elif scale_val == 60:
-                        return "6强"
-                    return disp
+                    return ScaleConverter.format_jma_cwa_scale_display(scale_val)
 
                 if options.get("detailed_jma_intensity", False):
                     # 详细模式：显示所有震度级别（从大到小）

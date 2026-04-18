@@ -29,11 +29,15 @@ class EventDeduplicator:
 
     def should_push_event(self, event: DisasterEvent) -> bool:
         """判断是否应该推送事件 - 允许多数据源推送同一事件"""
+        # 当前基础去重器只处理地震事件；
+        # 其他灾种的重复控制主要依赖更上层的业务规则与日志过滤逻辑。
         if not isinstance(event.data, EarthquakeData):
             return True  # 非地震事件直接推送
 
         earthquake = event.data
-        source_id = self._get_source_id(event)
+        source_id = (
+            event.source.value if hasattr(event.source, "value") else str(event.source)
+        )
 
         # 生成事件指纹
         event_fingerprint = self.generate_event_fingerprint(earthquake)
@@ -136,8 +140,9 @@ class EventDeduplicator:
 
     def generate_event_fingerprint(self, earthquake: EarthquakeData) -> str:
         """生成事件指纹 - 基于地理位置和震级的简化指纹"""
-        # 对于地震预警 (EEW)，优先使用各数据源共享的事件 ID
-        # 尤其是 JMA，所有数据源 (Fan, Wolfx, P2P) 都使用气象厅分配的 14 位唯一 ID
+        # 指纹生成的总体策略是：
+        # 1) 对共享事件 ID 的预警源优先用官方 ID；
+        # 2) 否则退化为“坐标网格 + 震级网格 + 时间分钟桶”的近似指纹。
         if earthquake.disaster_type == DisasterType.EARTHQUAKE_WARNING:
             # JMA 地震预警
             if earthquake.source in [
@@ -281,26 +286,6 @@ class EventDeduplicator:
 
         logger.debug(f"[灾害预警] 报数 {current_report} 已处理过，跳过")
         return False
-
-    def _get_source_id(self, event: DisasterEvent) -> str:
-        """获取事件的数据源ID"""
-        source_mapping = {
-            DataSource.FAN_STUDIO_CEA.value: "cea_fanstudio",
-            DataSource.FAN_STUDIO_CEA_PR.value: "cea_pr_fanstudio",
-            DataSource.WOLFX_CENC_EEW.value: "cea_wolfx",
-            DataSource.FAN_STUDIO_CWA.value: "cwa_fanstudio",
-            DataSource.FAN_STUDIO_CWA_REPORT.value: "cwa_fanstudio_report",
-            DataSource.WOLFX_CWA_EEW.value: "cwa_wolfx",
-            DataSource.FAN_STUDIO_JMA.value: "jma_fanstudio",
-            DataSource.P2P_EEW.value: "jma_p2p",
-            DataSource.P2P_EARTHQUAKE.value: "jma_p2p_info",
-            DataSource.WOLFX_JMA_EEW.value: "jma_wolfx",
-            DataSource.FAN_STUDIO_CENC.value: "cenc_fanstudio",
-            DataSource.FAN_STUDIO_USGS.value: "usgs_fanstudio",
-            DataSource.GLOBAL_QUAKE.value: "global_quake",
-        }
-
-        return source_mapping.get(event.source.value, event.source.value)
 
     def cleanup_old_events(self):
         """清理过期事件"""
