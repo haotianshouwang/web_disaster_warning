@@ -244,7 +244,7 @@ class DisasterWarningPlugin(Star):
         ):
             yield result
 
-    @filter.command("地震列表查询")
+    @filter.command("地震列表查询", alias={"地震列表"})
     async def query_earthquake_list(
         self,
         event: AstrMessageEvent,
