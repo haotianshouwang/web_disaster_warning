@@ -96,7 +96,12 @@ class WebAdminServer:
             token = request.query_params.get("token", "")
             if not token:
                 auth_header = request.headers.get("Authorization", "")
-                token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+                auth_parts = auth_header.split(" ", 1)
+                token = (
+                    auth_parts[1].strip()
+                    if len(auth_parts) == 2 and auth_parts[0].lower() == "bearer"
+                    else ""
+                )
             if not self._auth_token or not secrets.compare_digest(
                 token, self._auth_token
             ):

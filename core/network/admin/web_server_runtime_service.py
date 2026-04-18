@@ -101,8 +101,13 @@ class WebServerRuntimeService:
         if self.server._auth_enabled:
             token = websocket.query_params.get("token", "")
             if not token:
-                token = websocket.headers.get("Authorization", "")
-                token = token[7:] if token.startswith("Bearer ") else ""
+                auth_header = websocket.headers.get("Authorization", "")
+                auth_parts = auth_header.split(" ", 1)
+                token = (
+                    auth_parts[1].strip()
+                    if len(auth_parts) == 2 and auth_parts[0].lower() == "bearer"
+                    else ""
+                )
             if not self.server._auth_token or not secrets.compare_digest(
                 token, self.server._auth_token
             ):
