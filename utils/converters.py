@@ -3,6 +3,7 @@
 提供震度/烈度转换、数值转换等通用功能
 """
 
+import math
 import re
 from typing import Any
 
@@ -142,6 +143,93 @@ class ScaleConverter:
             70: 7.0,  # 震度7
         }
         return scale_mapping.get(p2p_scale)
+
+    @staticmethod
+    def format_jma_cwa_scale_display(scale_value: str | int | float | None) -> str:
+        """
+        将日本/台湾震度值转换为展示文本。
+
+        支持输入：
+        - 原始字符串: "5-", "5+", "5弱", "5強", "6弱"
+        - 解析后的浮点值: 4.5, 5.0, 5.5, 6.0
+        - P2P 原始整数: 45, 50, 55, 60, 70
+        """
+        if scale_value is None:
+            return ""
+
+        if isinstance(scale_value, str):
+            scale_str = scale_value.strip()
+            if not scale_str:
+                return ""
+
+            normalized = (
+                scale_str.replace("強", "强").replace("＋", "+").replace("－", "-")
+            )
+            display_mapping = {
+                "5-": "5弱",
+                "5+": "5强",
+                "6-": "6弱",
+                "6+": "6强",
+                "5弱": "5弱",
+                "5强": "5强",
+                "5強": "5强",
+                "6弱": "6弱",
+                "6强": "6强",
+                "6強": "6强",
+                "7": "7",
+                "4": "4",
+                "3": "3",
+                "2": "2",
+                "1": "1",
+                "0": "0",
+            }
+            if normalized in display_mapping:
+                return display_mapping[normalized]
+
+            parsed = ScaleConverter.parse_jma_cwa_scale(normalized)
+            if parsed is None:
+                return scale_str
+            scale_value = parsed
+
+        if isinstance(scale_value, int) and scale_value in {
+            10,
+            20,
+            30,
+            40,
+            45,
+            46,
+            50,
+            55,
+            60,
+            70,
+        }:
+            if scale_value == 45 or scale_value == 46:
+                return "5弱"
+            if scale_value == 50:
+                return "5强"
+            if scale_value == 55:
+                return "6弱"
+            if scale_value == 60:
+                return "6强"
+            if scale_value == 70:
+                return "7"
+            return str(scale_value // 10)
+
+        if isinstance(scale_value, (int, float)):
+            num = float(scale_value)
+            if math.isclose(num, 4.5, abs_tol=0.01):
+                return "5弱"
+            if math.isclose(num, 5.0, abs_tol=0.01):
+                return "5强"
+            if math.isclose(num, 5.5, abs_tol=0.01):
+                return "6弱"
+            if math.isclose(num, 6.0, abs_tol=0.01):
+                return "6强"
+            if math.isclose(num, round(num), abs_tol=0.01):
+                return str(int(round(num)))
+            return f"{num:.1f}".rstrip("0").rstrip(".")
+
+        return str(scale_value)
 
     @classmethod
     def convert_roman_intensity(cls, intensity_str: str) -> float | None:
