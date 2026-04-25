@@ -6,8 +6,8 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 
 from .core.app.disaster_service import get_disaster_service
-from .core.network.admin.web_server import WebAdminServer
-from .core.support.telemetry_manager import TelemetryManager
+from .core.network.admin.host.web_server import WebAdminServer
+from .core.services.telemetry.telemetry_service import TelemetryManager
 from .plugin.commands.plugin_admin_command_service import PluginAdminCommandService
 from .plugin.commands.plugin_query_command_service import PluginQueryCommandService
 from .plugin.plugin_command_support_service import PluginCommandSupportService
