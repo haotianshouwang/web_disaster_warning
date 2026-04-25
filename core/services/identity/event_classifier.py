@@ -1,0 +1,83 @@
+"""
+事件分类服务。
+负责承接旧工具层中迁移出的业务判定逻辑，用于统一识别重大事件。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ...domain.event_models import (
+    EarthquakeEvent,
+    EventEnvelope,
+    TsunamiEvent,
+    WeatherEvent,
+)
+from ...domain.event_payload import SourcePayload
+
+_MAJOR_WEATHER_KEYWORDS = ("红", "橙")
+
+
+def is_major_record(record: dict[str, Any]) -> bool:
+    """根据持久化记录判断是否为重大事件。
+
+    该函数主要服务于历史记录筛选与管理端重大事件列表构建。
+    """
+    record_type = str(record.get("type", "") or "").strip()
+    # 持久化记录按事件类型分别采用震级、海啸类型或气象级别做重大性判断。
+    if record_type in {"earthquake", "earthquake_warning"}:
+        magnitude = record.get("magnitude")
+        return magnitude is not None and magnitude >= 5.0
+    if record_type == "tsunami":
+        return True
+    if record_type == "weather_alarm":
+        level = str(record.get("level") or "")
+        description = str(record.get("description") or "")
+        return any(
+            keyword in candidate
+            for keyword in _MAJOR_WEATHER_KEYWORDS
+            for candidate in (level, description)
+        )
+    return False
+
+
+def is_major_event(event: EventEnvelope) -> bool:
+    """根据运行时事件判断是否为重大事件。
+
+    与持久化记录版本类似，但这里优先利用领域事件对象与运行时载荷信息。
+    """
+    envelope = event
+    domain_event = envelope.event
+
+    # 地震、海啸和气象事件采用不同的重大性判断标准。
+    if isinstance(domain_event, EarthquakeEvent):
+        return domain_event.magnitude is not None and domain_event.magnitude >= 5.0
+    if isinstance(domain_event, TsunamiEvent):
+        return True
+    if isinstance(domain_event, WeatherEvent):
+        payload = (
+            envelope.payload.to_dict()
+            if isinstance(envelope.payload, SourcePayload)
+            else {}
+        )
+        metadata = envelope.metadata if isinstance(envelope.metadata, dict) else {}
+        level = str(
+            getattr(domain_event, "alert_level", "")
+            or metadata.get("level", "")
+            or payload.get("alert_level")
+            or payload.get("level")
+        )
+        title = str(
+            domain_event.title
+            or domain_event.headline
+            or metadata.get("title", "")
+            or metadata.get("headline", "")
+            or payload.get("title", "")
+            or payload.get("headline", "")
+        )
+        return any(
+            keyword in candidate
+            for keyword in _MAJOR_WEATHER_KEYWORDS
+            for candidate in (level, title)
+        )
+    return False
