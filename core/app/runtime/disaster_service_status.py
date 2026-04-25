@@ -9,85 +9,58 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from ...services.query.source_runtime_query_service import SourceRuntimeQueryService
+
 
 class DisasterServiceStatusService:
-    """灾害服务状态投影服务。"""
+    """灾害服务状态整理服务。
+
+    这里不直接负责连接、推送或存储动作，
+    而是把主服务与若干子服务中的运行信息整理成便于展示和查询的结构化快照。
+    """
 
     def __init__(self, service):
+        # 主服务提供运行标志、连接任务、统计管理器等原始状态来源。
         self.service = service
+        # 运行时查询服务负责把配置层的数据源开关整理成管理端可消费的状态结构。
+        self._source_runtime_query = SourceRuntimeQueryService(service.config)
 
     def get_service_status(self) -> dict[str, Any]:
         """获取服务状态。"""
         connection_status = self.service.ws_manager.get_all_connections_status()
-        # 这里聚合的是“连接状态投影”，供 Web 管理端与命令查询统一复用。
+        # 该值反映的是“当前已连上的 WebSocket 连接数量”，
+        # 与配置中声明了多少连接、启动过多少任务并不完全等价。
         active_websocket_connections = sum(
             1 for status in connection_status.values() if status["connected"]
         )
+        # global_quake 连接存在一定特殊性，管理端会单独关心它是否在线，
+        # 这里通过任务名快速整理出一个独立布尔状态。
         global_quake_connected = any(
             "global_quake" in task.get_name() if hasattr(task, "get_name") else False
             for task in self.service.connection_tasks
         )
-        sub_source_status = self.get_sub_source_status()
 
         return {
-            "running": self.service.running,
-            "active_websocket_connections": active_websocket_connections,
-            "global_quake_connected": global_quake_connected,
-            "total_connections": len(connection_status),
-            "connection_details": connection_status,
-            "sub_source_status": sub_source_status,
+            **self._source_runtime_query.build_runtime_snapshot(
+                actual_connections=connection_status,
+                running=self.service.running,
+                start_time=self.service.start_time.isoformat()
+                if hasattr(self.service, "start_time")
+                else None,
+                uptime=self.get_uptime(),
+                active_websocket_connections=active_websocket_connections,
+                message_logger_enabled=self.service.message_logger.enabled
+                if self.service.message_logger
+                else False,
+                global_quake_connected=global_quake_connected,
+            ),
+            # 统计摘要直接挂在顶层，便于管理端一次请求同时拿到运行状态与统计概览。
             "statistics_summary": self.service.statistics_manager.get_summary(),
-            "data_sources": self.get_active_data_sources(),
-            "message_logger_enabled": self.service.message_logger.enabled
-            if self.service.message_logger
-            else False,
-            "uptime": self.get_uptime(),
-            "start_time": self.service.start_time.isoformat()
-            if hasattr(self.service, "start_time")
-            else None,
         }
 
     def get_sub_source_status(self) -> dict[str, dict[str, bool]]:
         """获取所有子数据源的启用状态。"""
-        status = {
-            "fan_studio": {},
-            "p2p_earthquake": {},
-            "wolfx": {},
-            "global_quake": {},
-        }
-
-        # 这里输出的是配置层视角的“子数据源开关”，不等价于实时连接状态。
-        data_sources = self.service.config.get("data_sources", {})
-
-        fan_config = data_sources.get("fan_studio", {})
-        if isinstance(fan_config, dict):
-            status["fan_studio"] = {
-                k: v
-                for k, v in fan_config.items()
-                if k != "enabled" and isinstance(v, bool)
-            }
-
-        p2p_config = data_sources.get("p2p_earthquake", {})
-        if isinstance(p2p_config, dict):
-            status["p2p_earthquake"] = {
-                k: v
-                for k, v in p2p_config.items()
-                if k != "enabled" and isinstance(v, bool)
-            }
-
-        wolfx_config = data_sources.get("wolfx", {})
-        if isinstance(wolfx_config, dict):
-            status["wolfx"] = {
-                k: v
-                for k, v in wolfx_config.items()
-                if k != "enabled" and isinstance(v, bool)
-            }
-
-        gq_config = data_sources.get("global_quake", {})
-        if isinstance(gq_config, dict):
-            status["global_quake"] = {"enabled": gq_config.get("enabled", False)}
-
-        return status
+        return self._source_runtime_query.build_sub_source_status()
 
     def get_uptime(self) -> str:
         """获取服务运行时间。"""
@@ -99,6 +72,7 @@ class DisasterServiceStatusService:
         hours, remainder = divmod(delta.seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
 
+        # 输出格式刻意保持中文短文本风格，便于直接显示到命令回复或管理端卡片中。
         parts = []
         if days > 0:
             parts.append(f"{days}天")
@@ -111,25 +85,5 @@ class DisasterServiceStatusService:
 
     def get_active_data_sources(self) -> list[str]:
         """获取活跃的数据源。"""
-        active_sources: list[str] = []
-        data_sources = self.service.config.get("data_sources", {})
-        for service_name, service_config in data_sources.items():
-            # 这里的“活跃”定义为配置层已启用，不代表当前连接一定在线。
-            if not (
-                isinstance(service_config, dict)
-                and service_config.get("enabled", False)
-            ):
-                continue
-
-            enabled_children = [
-                source_name
-                for source_name, enabled in service_config.items()
-                if source_name != "enabled" and isinstance(enabled, bool) and enabled
-            ]
-            if enabled_children:
-                active_sources.extend(
-                    f"{service_name}.{source_name}" for source_name in enabled_children
-                )
-            else:
-                active_sources.append(service_name)
-        return active_sources
+        # 这里返回的是“配置上启用”的数据源标签集合，不等同于实时连接一定在线。
+        return self._source_runtime_query.get_enabled_source_labels()

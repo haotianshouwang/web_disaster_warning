@@ -9,22 +9,27 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from ...support.config_validator import ConfigValidator
+from ...services.config.config_service import ConfigAccessor
+from ...services.config.config_validation_service import ConfigValidator
 
 
 class DisasterServiceNoticeService:
     """灾害服务通知与文本展示服务。"""
 
+    # 离线通知只关心对用户可见的阶段语义；底层阶段代号在这里统一翻译为中文描述。
     _OFFLINE_STAGE_MAP = {
         "fallback": "进入兜底重试",
         "stop": "停止重连",
     }
 
     def __init__(self, service):
+        # 与生命周期服务类似，这里只保留主服务引用，便于共享配置、状态与消息发送能力。
         self.service = service
 
     async def handle_offline_notification(self, payload: dict[str, Any]) -> None:
         """处理 WebSocket 管理器离线通知回调。"""
+        # 这里负责把底层连接层抛出的松散字典整理成显式参数，
+        # 这样后续通知逻辑可以保持稳定签名，减少对上游字段结构的耦合。
         await self.notify_data_source_offline(
             connection_name=payload.get("connection_name", "unknown"),
             data_source=payload.get("data_source", "unknown"),
@@ -46,6 +51,7 @@ class DisasterServiceNoticeService:
         fallback_count: int | None = None,
     ) -> bool:
         """推送数据源离线通知（兜底重试/停止重连）。"""
+        # 若消息管理器不存在，说明当前运行环境不具备发送系统消息的条件，直接返回即可。
         if not self.service.message_manager:
             return False
 
@@ -54,6 +60,7 @@ class DisasterServiceNoticeService:
         state = self.service._offline_notification_state.get(key, {})
         last_ts = state.get("last_ts", 0.0)
         ttl_seconds = 1800
+        # 节流粒度为“同一连接 + 同一阶段”。
         # 相同连接在同一 stage 下 30 分钟内最多通知一次，避免离线抖动造成刷屏。
         if now - last_ts < ttl_seconds:
             return False
@@ -68,17 +75,19 @@ class DisasterServiceNoticeService:
             fallback_count=fallback_count,
         )
         offline_sessions = self.resolve_offline_notification_sessions()
-        success = await self.service.message_manager.push_system_message(
+        success = await self.service.message_manager.system_notification_service.push_system_message(
             message,
             target_sessions=offline_sessions,
         )
+        # 只在实际发送成功后刷新节流时间，避免因为发送失败而长时间吞掉后续提醒。
         if success:
             self.service._offline_notification_state[key] = {"last_ts": now}
         return bool(success)
 
     def resolve_offline_notification_sessions(self) -> list[str]:
         """解析离线通知目标会话列表。"""
-        # 优先使用独立的离线通知会话；若未配置，则回退到普通推送会话。
+        # 优先使用独立的离线通知会话，适用于希望把运维告警与普通灾情推送拆分的场景；
+        # 若未配置，再回退到通用目标会话，保证通知能力默认可用。
         offline_sessions = ConfigValidator._validate_target_sessions(
             self.service.config.get("offline_notification_sessions", []),
             key_name="offline_notification_sessions",
@@ -102,6 +111,8 @@ class DisasterServiceNoticeService:
         fallback_count: int | None,
     ) -> str:
         """构建离线通知文本。"""
+        # 阶段文案、重试次数和下一次重试时间会一起展示，
+        # 目的是让使用者能在一条通知里快速判断当前处于“短时抖动”还是“长期离线”。
         stage_text = self._OFFLINE_STAGE_MAP.get(stage, stage)
         retry_part = (
             f"短时重试: {retry_count}" if retry_count is not None else "短时重试: 未知"
@@ -124,16 +135,24 @@ class DisasterServiceNoticeService:
             f"🔁 {retry_part}",
             f"🛟 {fallback_part}",
         ]
+        # 只有进入兜底重试阶段时，“下一次重试”信息才最有意义，因此按阶段有条件展示。
         if stage == "fallback":
             message_lines.append(f"⏳ {next_retry_part}")
         return "\n".join(message_lines)
 
     def get_eew_query_text(self) -> str:
         """生成 /地震预警查询 文本。"""
-        status_data = self.service.get_eew_query_status_data()
+        # 文本生成并不直接读取原始事件，而是消费查询状态服务产出的结构化结果，
+        # 这样命令输出与管理端展示可以复用同一份状态基础。
+        data_sources_cfg = ConfigAccessor(self.service.config).data_sources_config()
+        status_data = self.service.eew_query_service.build_status_data(
+            self.service.eew_query_state,
+            data_sources_cfg,
+        )
         institutions = status_data.get("institutions", [])
 
-        # 先按“正在生效 / 已启用但暂无数据 / 未启用”分组，最后再拼接成对用户友好的查询文本。
+        # 先按“正在生效 / 已启用但暂无数据 / 未启用”分组，
+        # 最后再统一拼接，以获得更符合阅读顺序的文本结构。
         active_lines: list[str] = []
         inactive_items: list[tuple[int, str]] = []
         no_data_lines: list[str] = []
@@ -145,18 +164,21 @@ class DisasterServiceNoticeService:
             status = item.get("status")
 
             if status == "unavailable":
+                # 该机构对应的数据源开关未启用，因此不能把“无预警时长”误导性地展示为正常统计结果。
                 unavailable_lines.append(
                     f"- {display_name}：未启用对应数据源开关，无法计算无 EEW 时间"
                 )
                 continue
 
             if status == "no_data":
+                # 已启用但没有足够历史状态时，需要与“正常无预警”区分开，避免误解为系统已统计过。
                 no_data_lines.append(
                     f"- {display_name}：已启用数据源，但暂无可计算历史数据"
                 )
                 continue
 
             if status == "active":
+                # 正在生效的预警优先展示在最前面，便于用户一眼看到当前最关键的信息。
                 magnitude = item.get("magnitude")
                 place = item.get("place") or "未知地点"
                 mag_text = self._format_magnitude(magnitude)
@@ -165,6 +187,8 @@ class DisasterServiceNoticeService:
                 )
                 continue
 
+            # 剩余情况视为“当前无生效预警”，并按无预警时长升序排列，
+            # 让最近刚结束预警的机构优先显示在前面。
             elapsed = int(item.get("elapsed_seconds") or 0)
             inactive_items.append(
                 (
@@ -189,6 +213,7 @@ class DisasterServiceNoticeService:
                 lines.append("")
                 lines.extend(inactive_lines)
 
+        # “暂无历史数据”和“未启用”属于说明性补充信息，统一放在正文末尾，避免打断主信息阅读。
         if no_data_lines:
             lines.append("")
             lines.append("以下机构暂无可计算的历史 EEW 数据：")
@@ -207,6 +232,7 @@ class DisasterServiceNoticeService:
     @staticmethod
     def _format_magnitude(magnitude: Any) -> str:
         """格式化震级显示文本。"""
+        # 震级来源可能是数字、字符串甚至空值；这里统一转换为适合展示的一位小数字符串。
         if magnitude is None:
             return "?"
         try:
