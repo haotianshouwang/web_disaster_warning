@@ -16,6 +16,7 @@ class WebSocketReconnectService:
     """WebSocket 重连与离线通知服务。"""
 
     def __init__(self, manager):
+        """保存管理器引用，供重连流程读写连接状态。"""
         self.manager = manager
 
     def handle_connection_error(
@@ -32,9 +33,10 @@ class WebSocketReconnectService:
         if not self.manager.running:
             return
 
+        # 证书配置错误通常不是暂时性故障，继续重连意义不大，直接停止并通知上层。
         error_msg = str(error).lower()
         if "ssl" in error_msg or "certificate" in error_msg:
-            logger.warning(f"[灾害预警] {name} 遇到SSL配置错误，停止重连: {error}")
+            logger.warning(f"[灾害预警] {name} 遇到 SSL 配置错误，停止重连: {error}")
             self.emit_offline_notification(
                 connection_name=name,
                 stage="stop",
@@ -44,6 +46,7 @@ class WebSocketReconnectService:
             )
             return
 
+        # 关键错误可跳过短时重试，直接进入更保守的兜底阶段。
         force_fallback = self.is_critical_error(error)
         if force_fallback:
             logger.warning(
@@ -64,7 +67,7 @@ class WebSocketReconnectService:
         self.manager.reconnect_tasks[name] = reconnect_task
 
     def is_critical_error(self, error: Exception) -> bool:
-        """判断是否为关键错误（需要直接进入兜底重连）。"""
+        """判断是否为需要直接进入兜底重连的关键错误。"""
         error_msg = str(error).lower()
         if "401" in error_msg or "403" in error_msg:
             return True
@@ -92,6 +95,7 @@ class WebSocketReconnectService:
             fallback_interval = self.manager.config.get("fallback_retry_interval", 1800)
             fallback_max_count = self.manager.config.get("fallback_retry_max_count", -1)
 
+            # 短时重试计数与兜底重试计数分开维护，便于日志展示和策略判断。
             current_retry = self.manager.connection_retry_counts.get(name, 0)
             current_fallback = self.manager.fallback_retry_counts.get(name, 0)
             has_backup = connection_info and connection_info.get("backup_url")
@@ -171,6 +175,7 @@ class WebSocketReconnectService:
                 )
                 return
 
+            # 若配置了备用地址，则在主地址短时重试耗尽后切到备用地址继续尝试。
             target_uri = uri
             server_type = "主服务器"
             if has_backup and current_retry >= max_retries:
@@ -217,6 +222,7 @@ class WebSocketReconnectService:
         if not self.manager._offline_notify_callback:
             return
 
+        # 回调载荷尽量保持扁平，便于通知层直接格式化输出。
         info = self.manager.connection_info.get(connection_name, {})
         payload = {
             "connection_name": connection_name,

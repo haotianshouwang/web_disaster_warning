@@ -1,6 +1,6 @@
 """
-WebSocket Hub。
-负责 Web 管理端 WebSocket 连接集合管理与消息广播，减少 WebAdminServer 中的实时推送职责。
+管理端 WebSocket 广播中心。
+负责维护前端连接集合，并统一提供完整快照广播、常规更新广播、事件推送与批量关闭能力。
 """
 
 from __future__ import annotations
@@ -15,11 +15,12 @@ class WebSocketHub:
     """WebSocket 连接与广播中心。"""
 
     def __init__(self):
+        """初始化连接集合。"""
         self.connections: list[Any] = []
 
     def add(self, websocket) -> None:
         """注册连接。"""
-        # 这里不做去重假设，调用方保证同一 websocket 只在 accept 成功后注册一次。
+        # 这里不做去重假设，调用方保证同一连接只在握手成功后注册一次。
         self.connections.append(websocket)
 
     def remove(self, websocket) -> None:
@@ -51,7 +52,7 @@ class WebSocketHub:
         if not self.connections:
             return
 
-        # 数据只构建一次，再复用到所有连接，避免同一轮广播内重复读取服务状态。
+        # 同一轮广播内数据只构建一次，避免重复读取运行时状态。
         data = await data_factory()
         message = {"type": "update", "data": data}
         disconnected = []
@@ -61,6 +62,7 @@ class WebSocketHub:
             except Exception:
                 disconnected.append(websocket)
 
+        # 发送失败的连接在本轮广播后统一清理，避免边遍历边修改列表。
         for websocket in disconnected:
             self.remove(websocket)
 
@@ -73,6 +75,7 @@ class WebSocketHub:
         if not self.connections:
             return
 
+        # 事件推送既携带最新面板快照，也可附带一条新增事件详情。
         data = await data_factory()
         message: dict[str, Any] = {
             "type": "event",

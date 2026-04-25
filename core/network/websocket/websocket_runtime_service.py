@@ -17,10 +17,12 @@ class WebSocketRuntimeService:
     """WebSocket 运行时生命周期服务。"""
 
     def __init__(self, manager):
+        """保存管理器引用，供生命周期操作复用共享状态。"""
         self.manager = manager
 
     async def heartbeat_loop(self, name: str, websocket) -> None:
         """应用层心跳循环。"""
+        # 心跳周期直接复用统一配置，避免不同连接采用不一致的保活节奏。
         interval = self.manager.config.get("heartbeat_interval", 30)
         try:
             while True:
@@ -30,7 +32,7 @@ class WebSocketRuntimeService:
 
                 last_time = self.manager.last_heartbeat_time.get(name, 0)
                 current_time = asyncio.get_running_loop().time()
-                # 若超过 2 个心跳周期仍无任何活跃信号，则主动发送 ping 做保活探测。
+                # 若超过两个心跳周期仍无活跃信号，则主动发送 ping 做保活探测。
                 if current_time - last_time > interval * 2:
                     try:
                         logger.debug(f"[灾害预警] 发送应用层 Ping: {name}")
@@ -53,6 +55,7 @@ class WebSocketRuntimeService:
             except Exception as e:
                 logger.error(f"[灾害预警] WebSocket断开连接时出错 {name}: {e}")
             finally:
+                # 断开后同步清理连接句柄、元数据与心跳任务，避免残留脏状态。
                 self.manager.connections.pop(name, None)
                 self.manager.connection_info.pop(name, None)
                 if name in self.manager.heartbeat_tasks:
@@ -75,6 +78,7 @@ class WebSocketRuntimeService:
         self.manager.running = True
         self.manager._stopping = False
 
+        # 启动时若共享会话不存在，则先创建，供后续所有连接复用。
         if not self.manager.session or self.manager.session.closed:
             timeout = aiohttp.ClientTimeout(
                 total=self.manager.config.get("http_timeout", 30)
@@ -96,7 +100,7 @@ class WebSocketRuntimeService:
                 logger.info("[灾害预警] WebSocket管理器正在停止...")
                 self.manager.running = False
 
-                # 先停重连/心跳，再逐个断开连接，最后关闭共享 session，避免停机期任务继续拉起连接。
+                # 先停重连和心跳，再断开连接，最后关闭共享会话，避免停机期任务继续拉起连接。
                 reconnect_tasks = list(self.manager.reconnect_tasks.values())
                 await self.cancel_and_wait(reconnect_tasks)
                 self.manager.reconnect_tasks.clear()
