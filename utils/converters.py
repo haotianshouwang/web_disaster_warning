@@ -1,44 +1,15 @@
 """
-数据转换工具类
-提供震度/烈度转换、数值转换等通用功能
+数据转换工具。
+提供震度、烈度与数值转换等通用能力。
 """
 
 import math
 import re
 from typing import Any
 
-# 气象预警判定为重大事件的颜色关键词
-_MAJOR_WEATHER_KEYWORDS = ("红", "橙")
-
-
-def is_major_event(record: dict) -> bool:
-    """
-    根据事件字典判断是否为重大事件。
-
-    判定规则：
-    - earthquake / earthquake_warning：震级 >= 5.0
-    - tsunami：始终为重大事件
-    - weather_alarm：level 或 description 中包含"红"或"橙"
-    """
-    t = record.get("type", "")
-    if t in ("earthquake", "earthquake_warning"):
-        mag = record.get("magnitude")
-        return mag is not None and mag >= 5.0
-    if t == "tsunami":
-        return True
-    if t == "weather_alarm":
-        level = record.get("level") or ""
-        desc = record.get("description") or ""
-        return any(kw in s for kw in _MAJOR_WEATHER_KEYWORDS for s in (level, desc))
-    return False
-
 
 def safe_float_convert(value: Any) -> float | None:
-    """
-    安全地将值转换为浮点数
-    :param value: 输入值 (int, float, str, None)
-    :return: float 或 None
-    """
+    """安全地将输入值转换为浮点数。"""
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -52,9 +23,9 @@ def safe_float_convert(value: Any) -> float | None:
 
 
 class ScaleConverter:
-    """震度/烈度转换工具类"""
+    """震度与烈度转换工具类。"""
 
-    # 罗马数字到阿拉伯数字的映射 (用于 Global Quake 等数据源)
+    # 罗马数字到阿拉伯数字的映射，用于兼容 Global Quake 等数据源的烈度表示。
     ROMAN_TO_INT = {
         "I": 1,
         "II": 2,
@@ -73,22 +44,22 @@ class ScaleConverter:
     @staticmethod
     def parse_jma_cwa_scale(scale_str: str | int | float) -> float | None:
         """
-        解析日本(JMA)或台湾(CWA)震度字符串
-        支持格式: '5-', '5+', '5弱', '5強', '5', '6.5'(作为字符串)
+        解析日本或台湾震度字符串。
+        支持格式：'5-'、'5+'、'5弱'、'5強'、'5'、'6.5' 等。
 
-        映射规则 (基于项目现有逻辑):
+        映射规则如下：
         X弱 / X- -> X - 0.5
         X強 / X+ -> X + 0.5
         X        -> X.0
 
-        例如:
+        例如：
         5弱 -> 4.5
         5強 -> 5.5
         """
         if scale_str is None:
             return None
 
-        # 如果已经是数字，直接返回
+        # 若输入本身已经是数值，则直接返回。
         if isinstance(scale_str, (int, float)):
             return float(scale_str)
 
@@ -96,7 +67,7 @@ class ScaleConverter:
         if not scale_str:
             return None
 
-        # 支持 5+, 5-, 5弱, 5強 等多种格式
+        # 支持 5+、5-、5弱、5強 等多种格式。
         match = re.search(r"(\d+)(弱|強|\+|\-)?", scale_str)
         if match:
             base = int(match.group(1))
@@ -114,9 +85,9 @@ class ScaleConverter:
     @staticmethod
     def convert_p2p_scale(p2p_scale: int) -> float | None:
         """
-        将P2P震度值转换为标准震度
+        将 P2P 震度值转换为标准震度。
 
-        映射表:
+        映射表：
         10 -> 1.0
         20 -> 2.0
         30 -> 3.0
@@ -129,7 +100,7 @@ class ScaleConverter:
         70 -> 7.0 (7)
         """
         scale_mapping = {
-            -1: None,  # 震度情報不存在
+            -1: None,  # 震度信息不存在
             0: 0.0,  # 震度0
             10: 1.0,  # 震度1
             20: 2.0,  # 震度2
@@ -234,9 +205,7 @@ class ScaleConverter:
     @classmethod
     def convert_roman_intensity(cls, intensity_str: str) -> float | None:
         """
-        将罗马数字烈度转换为浮点数
-        :param intensity_str: 罗马数字字符串 (如 "IV", "V")
-        :return: 对应的数值 (如 4.0, 5.0)
+        将罗马数字烈度转换为浮点数。
         """
         if not intensity_str:
             return None
