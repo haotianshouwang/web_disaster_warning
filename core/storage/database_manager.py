@@ -15,11 +15,20 @@ import aiosqlite
 
 from astrbot.api import logger
 
-from ...utils.converters import is_major_event
+from ..services.identity.event_classifier import is_major_record
+from .source_compat import (
+    expand_source_aliases,
+    format_source_name,
+    normalize_source_name,
+)
 
 
 class DatabaseManager:
-    """数据库管理器"""
+    """数据库管理器。
+
+    负责事件历史的建库、迁移、写入、查询与统计，
+    同时维护主事件表与事件更新表之间的配套关系。
+    """
 
     def __init__(self, db_path: Path):
         """
@@ -34,8 +43,9 @@ class DatabaseManager:
     # ──────────────────────────── 初始化 / 迁移 ────────────────────────────
 
     async def initialize(self):
-        """异步初始化数据库，检测并执行必要的 schema 迁移"""
+        """异步初始化数据库，检测并执行必要的结构迁移。"""
         try:
+            # 先确保数据库目录存在，再建立连接并统一使用字典风格行对象。
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self.connection = await aiosqlite.connect(str(self.db_path))
             self.connection.row_factory = aiosqlite.Row
@@ -49,7 +59,7 @@ class DatabaseManager:
             raise
 
     async def _ensure_schema(self, cursor):
-        """检测并补齐 schema 列，创建表和索引（幂等）"""
+        """检测并补齐数据表字段，再创建表和索引。"""
         await cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='events'"
         )
@@ -68,6 +78,7 @@ class DatabaseManager:
                     "ALTER TABLE events ADD COLUMN weather_detail TEXT"
                 )
 
+        # event_updates 表保存每次推送或报次更新的快照，用于重建历史记录。
         await cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='event_updates'"
         )
@@ -81,7 +92,7 @@ class DatabaseManager:
         await self._create_tables(cursor)
 
     async def _create_tables(self, cursor):
-        """创建 v2 表结构（幂等）"""
+        """创建当前版本所需的表结构与索引。"""
         await cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS events (
@@ -125,6 +136,7 @@ class DatabaseManager:
             )
             """
         )
+        # 索引集中覆盖事件标识、来源、类型、时间等高频检索维度。
         for sql in (
             "CREATE INDEX IF NOT EXISTS idx_ev_real_id   ON events(real_event_id)",
             "CREATE INDEX IF NOT EXISTS idx_ev_unique_id ON events(unique_id)",
@@ -146,7 +158,8 @@ class DatabaseManager:
         """
         try:
             cursor = await self.connection.cursor()
-            is_major = bool(event_data.get("is_major")) or is_major_event(event_data)
+            # 是否重大事件既允许外部直接传入，也允许在入库前重新按规则补判一次。
+            is_major = bool(event_data.get("is_major")) or is_major_record(event_data)
 
             await cursor.execute(
                 """
@@ -181,6 +194,7 @@ class DatabaseManager:
             )
             new_id = cursor.lastrowid
 
+            # 首次写入主事件表后，同步写入一条更新记录，保证历史链条从首报开始完整。
             await cursor.execute(
                 """
                 INSERT INTO event_updates
@@ -215,9 +229,9 @@ class DatabaseManager:
             cursor = await self.connection.cursor()
             real_event_id = event_data.get("real_event_id")
             unique_id = event_data.get("unique_id")
-            is_major = bool(event_data.get("is_major")) or is_major_event(event_data)
+            is_major = bool(event_data.get("is_major")) or is_major_record(event_data)
 
-            # 查找 events.id
+            # 先在主事件表中找到对应物理记录，再决定是更新还是返回未命中。
             db_id = None
             if real_event_id:
                 await cursor.execute(
@@ -278,6 +292,7 @@ class DatabaseManager:
                 ),
             )
 
+            # 主事件表字段更新后，再追加一条报次记录，保留每次演进轨迹。
             await cursor.execute(
                 """
                 INSERT INTO event_updates
@@ -306,10 +321,10 @@ class DatabaseManager:
     # ──────────────────────────── 读操作 ────────────────────────────
 
     async def _attach_history(self, events: list[dict]) -> list[dict]:
-        """为事件列表批量附加 event_updates（重建 history 数组）"""
+        """为事件列表批量附加更新历史记录。"""
         if not events:
             return events
-        # 用 json_each(?) 传递 ID 列表，避免动态拼接 IN 子句
+        # 用 json_each(?) 传递编号列表，避免动态拼接 IN 子句带来的复杂性。
         ids = json.dumps([e["id"] for e in events])
         cursor = await self.connection.cursor()
         await cursor.execute(
@@ -345,18 +360,38 @@ class DatabaseManager:
         clauses: list[str],
         params: list[Any],
     ) -> None:
-        """追加数据源过滤子句：优先 source_id，兼容历史 source。"""
-        normalized_sources = [s for s in (sources or []) if s]
+        """追加数据源过滤子句：按原值、标准化值与展示名兼容匹配 source/source_id。"""
+        normalized_sources = [
+            str(s or "").strip() for s in (sources or []) if str(s or "").strip()
+        ]
         if not normalized_sources:
             return
 
-        placeholders = ",".join(["?"] * len(normalized_sources))
-        clauses.append(
-            "(COALESCE(NULLIF(source_id, ''), source) "
-            f"IN ({placeholders}) OR source IN ({placeholders}))"
+        expanded_sources = expand_source_aliases(normalized_sources)
+        normalized_aliases = sorted(
+            {
+                normalize_source_name(item)
+                for item in expanded_sources
+                if str(item or "").strip()
+            }
         )
-        params.extend(normalized_sources)
-        params.extend(normalized_sources)
+
+        raw_placeholders = ",".join(["?"] * len(expanded_sources))
+        normalized_placeholders = ",".join(["?"] * len(normalized_aliases))
+        clauses.append(
+            "("
+            "COALESCE(NULLIF(source_id, ''), source) IN (" + raw_placeholders + ") "
+            "OR source IN (" + raw_placeholders + ") "
+            "OR lower(COALESCE(NULLIF(source_id, ''), source)) IN ("
+            + normalized_placeholders
+            + ") "
+            "OR lower(source) IN (" + normalized_placeholders + ")"
+            ")"
+        )
+        params.extend(expanded_sources)
+        params.extend(expanded_sources)
+        params.extend(normalized_aliases)
+        params.extend(normalized_aliases)
 
     async def get_recent_events(self, limit: int = 500) -> list[dict[str, Any]]:
         """获取最近事件（含 history），按更新时间倒序"""
@@ -578,19 +613,17 @@ class DatabaseManager:
     async def get_event_source_options(
         self, event_type: str | None = None
     ) -> list[dict[str, str]]:
-        """获取事件数据源选项（value/label），value 优先 source_id，label 兼容 source。"""
+        """获取事件数据源选项（value/label），按最终展示语义去重。"""
         try:
             cursor = await self.connection.cursor()
             if event_type:
                 await cursor.execute(
                     """
                     SELECT
-                        COALESCE(NULLIF(source_id, ''), source) AS source_value,
-                        MIN(source) AS source_label
+                        COALESCE(NULLIF(source_id, ''), '') AS source_id_value,
+                        COALESCE(NULLIF(source, ''), '') AS source_label
                     FROM events
                     WHERE type=?
-                    GROUP BY COALESCE(NULLIF(source_id, ''), source)
-                    ORDER BY source_value ASC
                     """,
                     (event_type,),
                 )
@@ -598,26 +631,58 @@ class DatabaseManager:
                 await cursor.execute(
                     """
                     SELECT
-                        COALESCE(NULLIF(source_id, ''), source) AS source_value,
-                        MIN(source) AS source_label
+                        COALESCE(NULLIF(source_id, ''), '') AS source_id_value,
+                        COALESCE(NULLIF(source, ''), '') AS source_label
                     FROM events
-                    GROUP BY COALESCE(NULLIF(source_id, ''), source)
-                    ORDER BY source_value ASC
                     """
                 )
             rows = await cursor.fetchall()
-            result: list[dict[str, str]] = []
+
+            result_map: dict[str, dict[str, str]] = {}
             for row in rows:
-                source_value = row[0] if row and row[0] else ""
-                source_label = row[1] if row and row[1] else source_value
-                if source_value:
-                    result.append(
-                        {
-                            "source_value": str(source_value),
-                            "source_label": str(source_label),
-                        }
-                    )
-            return result
+                source_id_value = str(row[0] or "").strip()
+                source_label = str(row[1] or "").strip()
+                raw_source = source_id_value or source_label
+                if not raw_source:
+                    continue
+
+                normalized_source = normalize_source_name(raw_source)
+                display_label = format_source_name(raw_source)
+                current = result_map.get(display_label)
+                candidate = {
+                    "source_value": raw_source,
+                    "source_label": display_label,
+                    "normalized_source": normalized_source,
+                }
+
+                if current is None:
+                    result_map[display_label] = candidate
+                    continue
+
+                current_value = str(current.get("source_value") or "")
+                current_normalized = str(current.get("normalized_source") or "")
+                prefers_source_id = bool(source_id_value)
+                current_is_raw_label = (
+                    current_value.casefold()
+                    == str(source_label or "").strip().casefold()
+                )
+                normalized_changed = (
+                    normalized_source and normalized_source != current_normalized
+                )
+
+                if prefers_source_id or current_is_raw_label or normalized_changed:
+                    result_map[display_label] = candidate
+
+            return [
+                {
+                    "source_value": str(item.get("source_value") or ""),
+                    "source_label": str(item.get("source_label") or ""),
+                }
+                for item in sorted(
+                    result_map.values(),
+                    key=lambda item: str(item.get("source_label") or "").casefold(),
+                )
+            ]
         except Exception as e:
             logger.error(f"[灾害预警] 查询数据源选项失败: {e}")
             return []
