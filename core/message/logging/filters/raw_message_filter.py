@@ -30,6 +30,7 @@ class RawMessageFilter:
         is_connection_status_message,
         try_parse_binary_message,
     ):
+        # 过滤器本身不直接依赖主记录器对象，而是通过注入回调获取判定能力。
         self.enabled = enabled
         self.filter_heartbeat = filter_heartbeat
         self.filter_types = filter_types
@@ -69,6 +70,7 @@ class RawMessageFilter:
         return ""
 
     def _handle_string_message(self, payload_data: str, source_id: str) -> str:
+        """处理字符串形态的原始消息。"""
         try:
             data = json.loads(payload_data)
         except json.JSONDecodeError:
@@ -99,6 +101,7 @@ class RawMessageFilter:
         return ""
 
     def _handle_dict_message(self, payload_data: dict[str, Any], source_id: str) -> str:
+        """处理字典形态的原始消息。"""
         msg_type = payload_data.get("type", "")
         logger.debug(
             f"[灾害预警] 消息记录器 - 检查字典类型消息，来源: {source_id}, 类型: {msg_type}"

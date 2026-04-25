@@ -18,6 +18,7 @@ class LogStatsRepository:
     """日志统计持久化仓储。"""
 
     def __init__(self, stats_file: Path):
+        # 统计仓储只负责一个 JSON 统计文件的读写。
         self.stats_file = stats_file
 
     def load(self) -> dict[str, Any]:

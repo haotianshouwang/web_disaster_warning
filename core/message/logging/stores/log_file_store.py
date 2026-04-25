@@ -22,6 +22,7 @@ class LogFileStore:
         max_size_mb: int = 50,
         max_files: int = 5,
     ):
+        # 存储器维护主日志路径、轮转上限和文件级写锁。
         self.log_file_path = Path(log_file_path)
         self.max_size_mb = max_size_mb
         self.max_files = max_files

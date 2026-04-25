@@ -19,6 +19,7 @@ class MessageReadableLogService:
     """消息可读日志构建服务。"""
 
     def __init__(self, logger_instance):
+        # 通过主记录器复用底层字典格式化与二进制解析能力。
         self.logger = logger_instance
 
     def format_readable_log(self, log_entry: dict[str, Any]) -> str:
@@ -109,6 +110,7 @@ class MessageReadableLogService:
         connection_info: dict[str, Any],
     ) -> str:
         """根据数据类型格式化原始载荷。"""
+        # 这里统一处理字符串、字典和二进制三大类输入，向上层屏蔽具体差异。
         if isinstance(payload_data, str):
             try:
                 parsed_data = json.loads(payload_data)

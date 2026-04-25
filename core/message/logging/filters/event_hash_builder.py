@@ -13,9 +13,11 @@ class EventHashBuilder:
     """事件哈希构建器。"""
 
     def __init__(self, payload_extractor):
+        # 载荷提取能力由外部注入，便于兼容不同消息封装结构。
         self._payload_extractor = payload_extractor
 
     def generate_event_hash(self, data: dict[str, Any], source_id: str) -> str:
+        """根据消息内容生成事件去重哈希。"""
         # 先抽取 payload，再统一判定事件类型，以便不同来源消息走相同的哈希生成分支。
         payload = self._payload_extractor(data)
         hash_parts = [f"source:{source_id}"]
@@ -31,6 +33,7 @@ class EventHashBuilder:
         return self.generate_generic_hash(payload, hash_parts)
 
     def detect_event_type(self, data: dict[str, Any], payload: dict[str, Any]) -> str:
+        """根据原始字典与业务载荷推断事件类型。"""
         msg_type = str(data.get("type", "") or payload.get("type", "")).lower()
         if any(k in msg_type for k in ["weather", "alarm", "warning"]):
             return "weather"
@@ -49,6 +52,7 @@ class EventHashBuilder:
         return "generic"
 
     def generate_weather_hash(self, data: dict[str, Any], hash_parts: list[str]) -> str:
+        """生成气象类消息的去重哈希。"""
         event_id = data.get("id") or data.get("alertId") or data.get("identifier")
         if event_id:
             hash_parts.append(f"wid:{event_id}")
@@ -117,6 +121,7 @@ class EventHashBuilder:
         return "|".join(hash_parts)
 
     def generate_tsunami_hash(self, data: dict[str, Any], hash_parts: list[str]) -> str:
+        """生成海啸类消息的去重哈希。"""
         event_id = data.get("id") or data.get("code")
         if event_id:
             hash_parts.append(f"tid:{event_id}")
@@ -136,6 +141,7 @@ class EventHashBuilder:
         return "|".join(hash_parts)
 
     def generate_generic_hash(self, data: dict[str, Any], hash_parts: list[str]) -> str:
+        """生成通用兜底哈希。"""
         for key in ["id", "ID", "eventId", "EventID", "code", "md5"]:
             if val := data.get(key):
                 hash_parts.append(f"gid:{val}")

@@ -57,6 +57,7 @@ class MessageLogHelperService:
         ]
         message_str = str(data).lower()
         if any(keyword in message_str for keyword in connection_keywords):
+            # 如果同时出现明显灾害业务词，则优先视为业务消息而不是单纯连接状态消息。
             disaster_keywords = [
                 "earthquake",
                 "地震",

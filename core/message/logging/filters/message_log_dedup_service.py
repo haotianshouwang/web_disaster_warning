@@ -13,6 +13,7 @@ class MessageLogDedupService:
     """消息日志内容去重服务。"""
 
     def __init__(self, logger_instance):
+        # 通过主记录器实例复用最近日志缓存与容量配置。
         self.logger = logger_instance
 
     def extract_content_without_timestamp(self, log_content: str) -> str:

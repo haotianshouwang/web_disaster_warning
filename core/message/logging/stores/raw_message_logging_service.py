@@ -25,6 +25,7 @@ class RawMessageLoggingService:
     }
 
     def __init__(self, logger_instance):
+        # 通过主记录器实例复用过滤、格式化、摘要和写文件等能力。
         self.logger = logger_instance
 
     def log_raw_message(
@@ -81,12 +82,14 @@ class RawMessageLoggingService:
             logger.error(f"[灾害预警] 异常堆栈: {traceback.format_exc()}")
 
     def _in_startup_silence(self) -> bool:
+        """判断是否仍处于启动静默期。"""
         if self.logger.startup_silence_duration <= 0:
             return False
         elapsed = (datetime.now(timezone.utc) - self.logger.start_time).total_seconds()
         return elapsed < self.logger.startup_silence_duration
 
     def _try_parse_structured_payload(self, payload_data: Any) -> dict[str, Any] | None:
+        """尽量把原始载荷解析为结构化字典。"""
         if isinstance(payload_data, dict):
             return payload_data
 
@@ -127,6 +130,7 @@ class RawMessageLoggingService:
         message_type: str,
         filter_reason: str,
     ) -> None:
+        """处理被过滤消息的统计与日志输出。"""
         is_high_frequency = any(
             keyword in filter_reason
             for keyword in ["消息类型过滤", "P2P节点状态", "心跳", "重复事件"]

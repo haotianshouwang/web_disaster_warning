@@ -30,6 +30,7 @@ class GlobalQuakeProtobufParser:
     }
 
     def __init__(self, timestamp_formatter: Callable[[int], str]):
+        # 时间格式化能力由外部注入，便于与日志系统的时间显示规则保持一致。
         self._timestamp_formatter = timestamp_formatter
 
     def parse(self, binary_data: bytes) -> dict[str, Any] | None:
@@ -65,6 +66,7 @@ class GlobalQuakeProtobufParser:
     def _build_earthquake_payload(self, ws_msg: WsMessage) -> dict[str, Any]:
         """构建地震消息数据载荷。"""
         eq = ws_msg.earthquake_data
+        # 这里统一把 protobuf 字段投影为普通字典键，便于日志格式化器继续处理。
         data: dict[str, Any] = {
             "id": eq.id,
             "latitude": eq.latitude,

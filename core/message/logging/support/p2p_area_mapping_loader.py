@@ -16,7 +16,7 @@ class P2PAreaMappingLoader:
     @staticmethod
     def load(csv_path: Path) -> dict[int, str]:
         """从 CSV 文件加载 P2P 区域代码映射。"""
-        # 返回 area_code -> region_name 映射，供日志格式化阶段把纯数字区域码翻译为可读地名。
+        # 返回区域代码到地区名称的映射，供日志格式化阶段把纯数字区域码翻译为可读地名。
         area_mapping: dict[int, str] = {}
 
         try:

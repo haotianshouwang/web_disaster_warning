@@ -14,6 +14,7 @@ class EarthquakeListSummaryService:
     """地震列表摘要日志服务。"""
 
     def __init__(self, logger_instance):
+        # 通过主记录器复用配置与统一日志入口。
         self.logger = logger_instance
 
     def log_summary(
@@ -54,6 +55,7 @@ class EarthquakeListSummaryService:
         earthquake_list: dict[str, Any],
         max_items: int,
     ) -> dict[str, Any]:
+        """构建地震列表摘要数据。"""
         summary_data: dict[str, Any] = {
             "summary": True,
             "message": f"地震列表摘要 (仅显示前 {max_items} 条)",
@@ -107,6 +109,7 @@ class EarthquakeListSummaryService:
         earthquake_list: dict[str, Any],
         url: str | None,
     ) -> None:
+        """在摘要构建失败时记录兜底摘要。"""
         try:
             fallback_data = {
                 "error": "摘要生成失败",
