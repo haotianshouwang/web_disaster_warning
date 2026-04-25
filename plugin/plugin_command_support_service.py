@@ -17,6 +17,7 @@ class PluginCommandSupportService:
     """插件命令支持服务。"""
 
     def __init__(self, plugin):
+        """初始化插件命令支持服务。"""
         self.plugin = plugin
 
     async def is_plugin_admin(self, event) -> bool:
@@ -24,6 +25,7 @@ class PluginCommandSupportService:
         if event.is_admin():
             return True
 
+        # 插件管理员名单来自插件配置，作为宿主管理员权限之外的补充入口。
         sender_id = event.get_sender_id()
         plugin_admins = self.plugin.config.get("admin_users", [])
         return sender_id in plugin_admins
@@ -39,7 +41,7 @@ class PluginCommandSupportService:
 
     def get_config_schema(self) -> dict[str, Any]:
         """获取并缓存配置 Schema。"""
-        # Schema 只需读取一次，后续命令查询场景直接复用缓存以减少文件 IO。
+        # 配置结构只需读取一次，后续命令查询场景直接复用缓存以减少文件读取。
         if self.plugin._config_schema is not None:
             return self.plugin._config_schema
 
@@ -66,12 +68,14 @@ class PluginCommandSupportService:
         translated: dict[str, Any] = {}
         schema_item = schema_item or {}
         for key, value in config_item.items():
+            # 每个配置项都优先使用结构定义中的中文说明，缺失时再回退原键名。
             item_schema = (
                 schema_item.get(key, {}) if isinstance(schema_item, dict) else {}
             )
             description = item_schema.get("description", key)
 
             if isinstance(value, dict):
+                # 嵌套配置继续按子结构递归翻译，保持整棵配置树的展示风格一致。
                 sub_schema = item_schema.get("items", {})
                 translated[description] = self.translate_config_recursive(
                     value, sub_schema

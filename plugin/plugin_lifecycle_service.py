@@ -1,7 +1,7 @@
 """
 插件运行时与遥测生命周期服务。
 负责初始化期的配置修正、遥测注入、异常处理器安装、心跳任务管理与终止清理，
-减少 main.DisasterWarningPlugin 中的生命周期细节堆积。
+减少主插件类中的生命周期细节堆积。
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ import time
 
 from astrbot.api import logger
 
-from ..core.support.config_validator import ConfigValidator
-from ..core.support.telemetry_manager import TelemetryManager
+from ..core.services.config.config_validation_service import ConfigValidator
+from ..core.services.telemetry.telemetry_service import TelemetryManager
 from ..utils.version import get_plugin_version
 
 
@@ -22,6 +22,7 @@ class PluginLifecycleService:
     """插件生命周期编排服务。"""
 
     def __init__(self, plugin):
+        """初始化插件生命周期服务。"""
         self.plugin = plugin
 
     def sync_admin_users_from_global(self) -> None:
@@ -38,10 +39,12 @@ class PluginLifecycleService:
 
     def validate_and_fix_config(self) -> None:
         try:
+            # 校验时先复制一份配置快照，避免在校验过程中直接污染运行中的原始配置对象。
             config_copy = copy.deepcopy(dict(self.plugin.config))
             validated_config = ConfigValidator.validate(config_copy)
             config_changed = False
             for key, value in validated_config.items():
+                # 仅在校验结果与当前值不一致时才写回，减少无意义保存。
                 if self.plugin.config.get(key) != value:
                     self.plugin.config[key] = value
                     config_changed = True
@@ -52,6 +55,7 @@ class PluginLifecycleService:
             logger.error(f"[灾害预警] 配置校验失败: {e}")
 
     def setup_telemetry(self) -> None:
+        # 遥测初始化与主服务解耦，便于在生命周期阶段统一注入和关闭。
         self.plugin.telemetry = TelemetryManager(
             config=dict(self.plugin.config),
             plugin_version=get_plugin_version(),
@@ -63,6 +67,7 @@ class PluginLifecycleService:
         if not self.plugin.telemetry or not self.plugin.telemetry.enabled:
             return
         loop = asyncio.get_running_loop()
+        # 先保存原异常处理器，停机时再恢复，避免影响宿主其他模块。
         self.plugin._original_exception_handler = loop.get_exception_handler()
         loop.set_exception_handler(self.handle_asyncio_exception)
         logger.debug("[灾害预警] 已设置全局异常处理器")
@@ -72,6 +77,7 @@ class PluginLifecycleService:
             return
 
         self.plugin._start_time = time.monotonic()
+        # 启动阶段同时上报启动事件与当前配置快照，并统一纳入遥测任务集合管理。
         startup_task = asyncio.create_task(self.plugin.telemetry.track_startup())
         config_task = asyncio.create_task(
             self.plugin.telemetry.track_config(dict(self.plugin.config))
@@ -88,6 +94,7 @@ class PluginLifecycleService:
         if not self.plugin._telemetry_tasks:
             return
         pending_tasks = list(self.plugin._telemetry_tasks)
+        # 停机时先取消未完成任务，再集中等待回收，避免遗留后台协程。
         for task in pending_tasks:
             if not task.done():
                 task.cancel()
@@ -129,11 +136,13 @@ class PluginLifecycleService:
             and self.plugin.disaster_service.message_manager
         ):
             if hasattr(self.plugin.disaster_service.message_manager, "browser_manager"):
+                # 浏览器资源通常最重，优先回收，避免宿主退出后仍残留外部进程。
                 try:
                     await self.plugin.disaster_service.message_manager.cleanup_browser()
                 except Exception as be:
                     logger.debug(f"[灾害预警] 浏览器清理时出错（已忽略）: {be}")
             try:
+                # 消息管理器内部的气象筛选器可能持有网络会话，需要显式关闭。
                 await (
                     self.plugin.disaster_service.message_manager.weather_filter.close()
                 )
@@ -147,6 +156,7 @@ class PluginLifecycleService:
             and self.plugin.disaster_service.statistics_manager
         ):
             try:
+                # 统计模块中的地区解析器也可能缓存网络会话，停机时一并回收。
                 await self.plugin.disaster_service.statistics_manager._weather_region_resolver.close()
             except Exception as wfe:
                 logger.debug(
@@ -160,6 +170,7 @@ class PluginLifecycleService:
                 logger.debug(f"[灾害预警] 遥测会话关闭时出错（已忽略）: {te}")
 
         if self.plugin.web_server:
+            # 最后停止管理端服务，避免资源尚未清理完时前端仍继续访问。
             await self.plugin.web_server.stop()
 
     def handle_asyncio_exception(self, loop, context) -> None:
@@ -167,6 +178,7 @@ class PluginLifecycleService:
         message = context.get("message", "未知异常")
 
         is_plugin_exception = False
+        # 只接管本插件抛出的异步异常，其他异常继续交还宿主原处理器。
         if exception:
             tb = exception.__traceback__
             while tb is not None:
@@ -191,8 +203,10 @@ class PluginLifecycleService:
             logger.error(f"[灾害预警] 捕获未处理的异步错误: {message}")
 
         if self.plugin.telemetry and self.plugin.telemetry.enabled:
+            # 仅在遥测启用时补充异常上报，避免在禁用状态下继续创建额外任务。
             if exception:
                 task = context.get("future")
+                # 尽量提取任务名称，便于后续在遥测中定位是哪一类后台任务出了问题。
                 task_name = "unknown"
                 if task:
                     task_name = getattr(task, "get_name", lambda: str(task))()
@@ -221,6 +235,7 @@ class PluginLifecycleService:
 
     async def heartbeat_loop(self) -> None:
         heartbeat_interval = 43200
+        # 心跳间隔固定为 12 小时，用于上报插件长期运行状态。
         try:
             while True:
                 if not self.plugin.telemetry or not self.plugin.telemetry.enabled:
