@@ -11,13 +11,20 @@ from astrbot.api import logger
 
 
 class EarthquakeListService:
-    """地震列表查询与格式化服务。"""
+    """地震列表查询与格式化服务。
+
+    负责维护地震列表缓存，并把原始列表项整理为卡片可直接消费的展示结构。
+    """
 
     def __init__(self, earthquake_lists: dict[str, dict[str, Any]] | None = None):
+        """初始化地震列表缓存容器。"""
         self.earthquake_lists = earthquake_lists or {"cenc": {}, "jma": {}}
 
     def update_earthquake_list(self, list_type: str, data: dict[str, Any]):
-        """更新内存中的地震列表。"""
+        """更新内存中的地震列表。
+
+        若目标列表仍为字典，则原地清空并覆写，尽量保持外部引用稳定。
+        """
         if list_type in self.earthquake_lists:
             target = self.earthquake_lists.get(list_type)
             if isinstance(target, dict) and isinstance(data, dict):
@@ -53,7 +60,10 @@ class EarthquakeListService:
     def _format_list_item(
         self, source_type: str, item: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """格式化单个列表项。"""
+        """格式化单个列表项。
+
+        同时兼容中国地震列表与日本地震情报在深度、震度字段上的差异。
+        """
         try:
             location = item.get("location", "未知地点")
             time_str = item.get("time", "")
@@ -113,6 +123,7 @@ class EarthquakeListService:
                         clean_d = str(depth).replace("km", "").strip()
                         depth = f"{clean_d} km"
 
+            # 不同来源使用不同的烈度或震度体系，这里先给出统一默认展示值。
             intensity_display = "-"
             intensity_class = "int-unknown"
 

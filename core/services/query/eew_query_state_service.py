@@ -19,7 +19,7 @@ from ..identity.event_identity import (
 def build_institutions_from_catalog(
     institutions: dict[str, dict[str, Any]] | None,
 ) -> dict[str, dict[str, Any]]:
-    """规范化机构视图，确保来源于统一 catalog 的结构可直接消费。"""
+    """规范化机构视图，确保统一目录中的结构可直接消费。"""
     result: dict[str, dict[str, Any]] = {}
     for institution_key, meta in (institutions or {}).items():
         if not isinstance(meta, dict):
@@ -42,7 +42,10 @@ def build_institutions_from_catalog(
 
 
 class EEWQueryStateService:
-    """EEW 查询状态服务。"""
+    """EEW 查询状态服务。
+
+    负责维护机构维度的最新预警状态，并构建供查询接口复用的结构化结果。
+    """
 
     def __init__(
         self,
@@ -56,7 +59,7 @@ class EEWQueryStateService:
         self._source_enabled_checker = source_enabled_checker
 
     def normalize_institution(self, source_id: str) -> str | None:
-        """将 source_id 归一化到机构维度。"""
+        """将数据源标识归一化到机构维度。"""
         for institution_key, meta in self.institutions.items():
             if source_id in meta.get("source_ids", []):
                 return institution_key
@@ -69,7 +72,10 @@ class EEWQueryStateService:
         source_id: str,
         event_key: str,
     ) -> str:
-        """构建机构内去重指纹。"""
+        """构建机构内去重指纹。
+
+        通过事件键、地点、震级与分钟桶描述同机构下的一条预警更新链。
+        """
         del source_id
         place = (data.place_name or "未知地点").strip()
         magnitude = "?" if data.magnitude is None else f"{float(data.magnitude):.1f}"
@@ -80,7 +86,10 @@ class EEWQueryStateService:
     def should_replace(
         self, current: dict[str, Any], candidate: dict[str, Any]
     ) -> bool:
-        """判断候选状态是否应覆盖当前状态。"""
+        """判断候选状态是否应覆盖当前状态。
+
+        优先比较报次，报次一致时再比较发布时间的新旧。
+        """
         current_fp = current.get("fingerprint", "")
         candidate_fp = candidate.get("fingerprint", "")
 
@@ -111,7 +120,10 @@ class EEWQueryStateService:
         state: dict[str, dict[str, Any]],
         event: EventEnvelope,
     ) -> dict[str, dict[str, Any]]:
-        """更新 EEW 查询状态。"""
+        """更新 EEW 查询状态。
+
+        仅处理地震预警事件，并按机构维度保留当前最适合展示的一条状态。
+        """
         envelope = event
         data = envelope.event
         if not isinstance(data, EarthquakeEvent):
@@ -185,7 +197,10 @@ class EEWQueryStateService:
         state: dict[str, dict[str, Any]],
         data_sources_cfg: dict[str, Any],
     ) -> dict[str, Any]:
-        """获取地震预警查询的结构化状态数据。"""
+        """获取地震预警查询的结构化状态数据。
+
+        返回结果可直接供命令查询与管理端接口复用。
+        """
         now_utc = datetime.now(timezone.utc)
         enabled_sources_map = self.get_enabled_sources_by_institution(data_sources_cfg)
 
