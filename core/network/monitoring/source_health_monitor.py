@@ -29,14 +29,15 @@ class SourceHealthMonitor:
     }
 
     def __init__(self, latency_cache: dict[str, float | None] | None = None):
+        """初始化延迟缓存容器。"""
         self.latency_cache = latency_cache if latency_cache is not None else {}
 
     def get_expected_data_sources(self) -> dict[str, str]:
-        """获取所有支持的数据源列表。"""
+        """返回管理端面板预期展示的数据源列表。"""
         return dict(self.DISPLAY_MAP)
 
     def get_data_source_host(self, source_name: str) -> str | None:
-        """获取数据源的主机名。"""
+        """获取指定数据源对应的探测主机名。"""
         return self.HOST_MAP.get(source_name)
 
     async def ping_host(
@@ -44,7 +45,7 @@ class SourceHealthMonitor:
     ) -> float | None:
         """使用 TCP 连接测试主机延迟。"""
         try:
-            # 这里采用 tcp connect 近似延迟探测，不依赖 ICMP，跨平台更稳定。
+            # 这里采用 TCP 建连近似测延迟，不依赖 ICMP，跨平台更稳定。
             start_time = asyncio.get_running_loop().time()
             future = asyncio.open_connection(host, port)
             _reader, writer = await asyncio.wait_for(future, timeout=timeout)
@@ -58,7 +59,7 @@ class SourceHealthMonitor:
 
             return (end_time - start_time) * 1000
         except (asyncio.TimeoutError, OSError, Exception) as e:
-            logger.debug(f"[灾害预警] TCP Ping {host}:{port} 异常: {e}")
+            logger.debug(f"[灾害预警] TCP 延迟探测异常 {host}:{port}: {e}")
             return None
 
     async def run_background_ping_loop(self, interval_seconds: float = 30.0):
@@ -68,6 +69,7 @@ class SourceHealthMonitor:
 
         while True:
             try:
+                # 每轮都根据当前预期数据源重新构造探测任务，便于后续扩展动态来源表。
                 expected_sources = self.get_expected_data_sources()
                 ping_tasks: dict[str, Any] = {}
 
