@@ -1,6 +1,9 @@
 """
-原始消息记录器
-适配数据源架构，提供更好的日志格式和过滤功能
+原始消息记录器。
+
+该模块负责把接入层收到的原始消息整理为便于排障与回溯的日志记录，
+同时结合过滤、去重、摘要统计与文件轮转能力，
+避免原始数据日志无限膨胀或充斥无意义噪声。
 """
 
 from datetime import datetime, timezone
@@ -11,28 +14,31 @@ from astrbot.api import logger
 from astrbot.api.star import StarTools
 
 from ...utils.version import get_plugin_version
-from ..support.config_accessor import ConfigAccessor
-from .logging.earthquake_list_summary_service import EarthquakeListSummaryService
-from .logging.event_hash_builder import EventHashBuilder
-from .logging.global_quake_protobuf_parser import GlobalQuakeProtobufParser
-from .logging.log_file_store import LogFileStore
-from .logging.log_stats_repository import LogStatsRepository
-from .logging.log_summary_service import LogSummaryService
-from .logging.message_json_formatter_service import MessageJsonFormatterService
-from .logging.message_log_dedup_service import MessageLogDedupService
-from .logging.message_log_helper_service import MessageLogHelperService
-from .logging.message_readable_log_service import MessageReadableLogService
-from .logging.p2p_area_mapping_loader import P2PAreaMappingLoader
-from .logging.raw_message_filter import RawMessageFilter
-from .logging.raw_message_logging_service import RawMessageLoggingService
+from ..services.config.config_service import ConfigAccessor
+from .logging.filters.event_hash_builder import EventHashBuilder
+from .logging.filters.message_log_dedup_service import MessageLogDedupService
+from .logging.filters.raw_message_filter import RawMessageFilter
+from .logging.formatters.earthquake_list_summary_service import (
+    EarthquakeListSummaryService,
+)
+from .logging.formatters.log_summary_service import LogSummaryService
+from .logging.formatters.message_json_formatter_service import (
+    MessageJsonFormatterService,
+)
+from .logging.formatters.message_readable_log_service import MessageReadableLogService
+from .logging.parsers.global_quake_protobuf_parser import GlobalQuakeProtobufParser
+from .logging.stores.log_file_store import LogFileStore
+from .logging.stores.log_stats_repository import LogStatsRepository
+from .logging.stores.raw_message_logging_service import RawMessageLoggingService
+from .logging.support.message_log_helper_service import MessageLogHelperService
+from .logging.support.p2p_area_mapping_loader import P2PAreaMappingLoader
 
 
 class MessageLogger:
-    """原始消息格式记录器"""
+    """原始消息格式记录器。"""
 
     def __init__(self, config: dict[str, Any], plugin_name: str):
-        # message_logger 现在更像“日志子系统装配器”，
-        # 自身保留 facade 接口，具体功能拆给 logging/ 下的多个子服务。
+        # 消息记录器负责装配日志子系统，并持有共享配置与运行时状态。
         self.config = config
         self.plugin_name = plugin_name
         self.config_accessor = ConfigAccessor(config)
@@ -40,6 +46,7 @@ class MessageLogger:
         self.p2p_area_mapping = self._load_p2p_area_mapping()
         debug_config = self.config_accessor.debug_config()
 
+        # 是否启用、文件名、轮转大小与保留份数都由调试配置控制。
         self.enabled = debug_config.get("enable_raw_message_logging", False)
         self.log_file_name = debug_config.get(
             "raw_message_log_path", "raw_messages.log"
@@ -47,6 +54,7 @@ class MessageLogger:
         self.max_size_mb = debug_config.get("log_max_size_mb", 50)
         self.max_files = debug_config.get("log_max_files", 5)
 
+        # 过滤项用于裁剪高频噪声消息，降低日志体积并提升可读性。
         self.filter_heartbeat = debug_config.get("filter_heartbeat_messages", True)
         self.filter_types = debug_config.get(
             "filtered_message_types", ["heartbeat", "ping", "pong"]
@@ -60,11 +68,13 @@ class MessageLogger:
         self.startup_silence_duration = debug_config.get("startup_silence_duration", 0)
 
         self.start_time = datetime.now(timezone.utc)
+        # 这些内存缓存分别服务于事件级去重与最近日志内容比对。
         self.recent_event_hashes: dict[str, float] = {}
         self.recent_raw_logs: list[str] = []
         self.max_cache_size = 1000
         self.max_raw_log_cache = 30
 
+        # 过滤统计用于命令查询和调试观察，不影响主业务功能。
         self.filter_stats = {
             "heartbeat_filtered": 0,
             "p2p_areas_filtered": 0,
@@ -125,10 +135,10 @@ class MessageLogger:
             logger.debug(f"[灾害预警] - 重复事件过滤: {self.filter_duplicate_events}")
             logger.debug(f"[灾害预警] - 连接状态过滤: {self.filter_connection_status}")
 
-    def _should_filter_message(self, raw_data: Any, source_id: str = "") -> str:
-        """判断是否应该过滤该消息，返回过滤原因，空字符串表示不过滤"""
-        # 过滤逻辑完全下沉到 RawMessageFilter，这里保留 facade 便于旧调用点继续复用。
-        return self._raw_message_filter.should_filter_message(raw_data, source_id)
+    def _should_filter_message(self, payload_data: Any, source_id: str = "") -> str:
+        """判断是否应该过滤该消息，返回过滤原因，空字符串表示不过滤。"""
+        # 具体过滤规则统一委托给独立过滤器，记录器本身只负责总协调。
+        return self._raw_message_filter.should_filter_message(payload_data, source_id)
 
     def _is_duplicate_event(self, data: dict[str, Any], source_id: str) -> bool:
         """判断是否为重复事件"""
@@ -150,7 +160,7 @@ class MessageLogger:
             return False
 
     def _generate_event_hash(self, data: dict[str, Any], source_id: str) -> str:
-        """生成事件哈希用于去重 - 智能识别事件类型"""
+        """生成用于去重的事件哈希。"""
         return self._event_hash_builder.generate_event_hash(data, source_id)
 
     def _try_parse_binary_message(
@@ -175,11 +185,11 @@ class MessageLogger:
             return None
 
     def _format_json_data(self, data: dict[str, Any], indent: int = 0) -> str:
-        """递归格式化JSON数据，增加可读性"""
+        """递归格式化字典数据，提升日志可读性。"""
         return self._json_formatter_service.format_json_data(data, indent=indent)
 
     def _load_p2p_area_mapping(self) -> dict[int, str]:
-        """加载P2P区域代码映射（基于真实的epsp-area.csv文件）"""
+        """加载 P2P 区域代码映射。"""
         csv_path = Path(__file__).parent.parent.parent / "resources/epsp-area.csv"
         return P2PAreaMappingLoader.load(csv_path)
 
@@ -195,16 +205,16 @@ class MessageLogger:
         self,
         source: str,
         message_type: str,
-        raw_data: Any,
+        payload_data: Any,
         connection_info: dict | None = None,
     ):
-        """记录原始消息"""
-        # 这是 message_logger 对外最核心的统一入口，
-        # 不论来自 WebSocket、HTTP 还是摘要日志，最终都收束到这里进入日志编排链。
+        """记录原始消息。"""
+        # 这是记录器对外最核心的统一入口，
+        # 无论消息来自 WebSocket、HTTP 还是列表摘要，最终都会汇入这里进入日志处理链。
         self._raw_message_logging_service.log_raw_message(
             source,
             message_type,
-            raw_data,
+            payload_data,
             connection_info,
         )
 
@@ -221,7 +231,7 @@ class MessageLogger:
         self.log_raw_message(
             source=f"websocket_{connection_name}",
             message_type="websocket_message",
-            raw_data=message,
+            payload_data=message,
             connection_info={"url": url, "connection_type": "websocket"}
             if url
             else {"connection_type": "websocket"},
@@ -234,7 +244,7 @@ class MessageLogger:
         self.log_raw_message(
             source="http_response",
             message_type="http_response",
-            raw_data=response_data,
+            payload_data=response_data,
             connection_info={
                 "url": url,
                 "status_code": status_code,
