@@ -90,7 +90,7 @@ function EventsList() {
                 setEvents(Array.isArray(data.events) ? data.events : []);
                 setTotal(data.total || 0);
                 setTotalPages(data.total_pages || 0);
-                setSourceOptions(Array.isArray(data.sources) ? data.sources : []);
+                setSourceOptions(Array.isArray(data.source_options) ? data.source_options : []);
                 const apiMaxLimit = Number(data.max_limit);
                 if (Number.isFinite(apiMaxLimit) && apiMaxLimit > 0) {
                     setMaxPageSize(Math.floor(apiMaxLimit));
@@ -175,18 +175,26 @@ function EventsList() {
 
     const availableSources = useMemo(() => {
         return (Array.isArray(sourceOptions) ? sourceOptions : [])
-            .map(s => (s || '').trim())
+            .map((item) => {
+                if (!item) return null;
+                const sourceValue = String(item.source_value || '').trim();
+                const sourceLabel = String(item.source_label || '').trim();
+                const rawValue = sourceValue || sourceLabel;
+                if (!rawValue) return null;
+
+                return {
+                    value: rawValue,
+                    label: formatSourceName(sourceLabel || sourceValue || rawValue),
+                    normalizedKey: normalizeSourceName(rawValue),
+                };
+            })
             .filter(Boolean)
-            .sort((a, b) => {
-                const aName = formatSourceName(a);
-                const bName = formatSourceName(b);
-                return aName.localeCompare(bName, 'zh-CN');
-            });
+            .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
     }, [sourceOptions]);
 
     useEffect(() => {
         if (selectedSources.length === 0) return;
-        const validSet = new Set(availableSources);
+        const validSet = new Set(availableSources.map(source => source.value));
         const nextSelected = selectedSources.filter(source => validSet.has(source));
         if (nextSelected.length !== selectedSources.length) {
             setSelectedSources(nextSelected);
@@ -618,11 +626,16 @@ function EventsList() {
         } else if (isWeather) {
             badgeContent = '☁️';
             badgeClass = 'badge-weather';
-            // 尝试构建气象预警图标 URL
-            // 优先从 weather_type_code (后端统计字段) 获取，其次尝试 raw_data
-            const pCode = evt.weather_type_code || evt.raw_data?.type || evt.data?.type;
-            if (pCode) {
-                weatherIconUrl = `https://image.nmc.cn/assets/img/alarm/${pCode}.png`;
+
+            const normalizedIconUrl = typeof evt.icon_url === 'string'
+                ? evt.icon_url.trim()
+                : '';
+            const weatherTypeCode = String(evt.weather_type_code || '').trim();
+
+            if (normalizedIconUrl) {
+                weatherIconUrl = normalizedIconUrl;
+            } else if (weatherTypeCode) {
+                weatherIconUrl = `https://image.nmc.cn/assets/img/alarm/${weatherTypeCode}.png`;
             }
         }
 
@@ -673,9 +686,14 @@ function EventsList() {
                                 transform: 'scale(1.5)' // 放大显示，因为原图标可能有留白
                             }}
                             onError={(e) => {
-                                e.target.style.display = 'none';
-                                // 图片加载失败时恢复背景色和阴影 (通过修改父元素样式较为复杂，这里简单处理)
-                                e.target.parentElement.style.backgroundColor = 'var(--md-sys-color-surface-variant)';
+                                const badgeEl = e.target.parentElement;
+                                e.target.remove();
+                                if (badgeEl) {
+                                    badgeEl.style.backgroundColor = 'var(--md-sys-color-surface-variant)';
+                                    badgeEl.style.borderRadius = '50%';
+                                    badgeEl.style.boxShadow = '';
+                                    badgeEl.textContent = badgeContent;
+                                }
                             }}
                         />
                     ) : earthquakeBadgeMeta ? (
@@ -739,7 +757,7 @@ function EventsList() {
                         </span>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                             <span style={{ opacity: 0.5 }}>•</span>
-                            📡 {formatSourceName(evt.source)}
+                            📡 {formatSourceName(evt.source_id || evt.source)}
                         </span>
                     </div>
                 </div>
@@ -897,8 +915,8 @@ function EventsList() {
                                 >
                                     <option value="">全部数据源</option>
                                     {availableSources.map((source) => (
-                                        <option key={source} value={source} title={source}>
-                                            {formatSourceName(source)}
+                                        <option key={source.normalizedKey} value={source.value} title={source.label}>
+                                            {source.label}
                                         </option>
                                     ))}
                                 </select>
@@ -955,13 +973,13 @@ function EventsList() {
                                             全部数据源
                                         </label>
                                         {availableSources.map((source) => (
-                                            <label key={source} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', fontSize: '13px' }}>
+                                            <label key={source.normalizedKey} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', fontSize: '13px' }}>
                                                 <input
                                                     type="checkbox"
-                                                    checked={selectedSources.includes(source)}
-                                                    onChange={() => handleSourceCheckboxToggle(source)}
+                                                    checked={selectedSources.includes(source.value)}
+                                                    onChange={() => handleSourceCheckboxToggle(source.value)}
                                                 />
-                                                {formatSourceName(source)}
+                                                {source.label}
                                             </label>
                                         ))}
                                     </div>
