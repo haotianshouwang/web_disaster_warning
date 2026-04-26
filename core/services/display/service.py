@@ -59,8 +59,8 @@ def build_display_context(
         projection["envelope"], "event_type", "unknown"
     )
 
-    # 地震、海啸和气象事件分别走各自的展示上下文构建分支。
-    if event_type == "earthquake":
+    # 地震类事件（含地震预警）共用地震展示上下文；海啸与气象分别走各自分支。
+    if event_type in {"earthquake", "earthquake_warning"}:
         return build_earthquake_display_context(projection, options)
     if event_type == "tsunami":
         return build_tsunami_display_context(projection, options)
