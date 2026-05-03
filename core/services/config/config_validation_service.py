@@ -338,19 +338,19 @@ class ConfigValidator:
             ConfigValidator._ensure_bool(cenc_fusion, "enabled", True)
             cfg["cenc_fusion"] = cenc_fusion
 
-        # CWA EEW 融合策略超时
+        # CWA EEW 最大震度融合策略超时
         cwa_eew_fusion = cfg.get("cwa_eew_fusion", {})
         if isinstance(cwa_eew_fusion, dict):
             timeout = cwa_eew_fusion.get("timeout")
             if isinstance(timeout, (int, float)):
                 if timeout < 1:
                     logger.warning(
-                        f"[灾害预警] 配置警告: CWA EEW 融合策略超时 {timeout} 过小，已修正为 1 秒。"
+                        f"[灾害预警] 配置警告: CWA EEW 最大震度融合策略超时 {timeout} 过小，已修正为 1 秒。"
                     )
                     cwa_eew_fusion["timeout"] = 1
                 elif timeout > 60:
                     logger.warning(
-                        f"[灾害预警] 配置警告: CWA EEW 融合策略超时 {timeout} 过大，已修正为 60 秒。"
+                        f"[灾害预警] 配置警告: CWA EEW 最大震度融合策略超时 {timeout} 过大，已修正为 60 秒。"
                     )
                     cwa_eew_fusion["timeout"] = 60
 

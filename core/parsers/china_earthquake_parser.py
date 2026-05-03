@@ -36,6 +36,7 @@ class CencEarthquakeParser(BaseParser):
             depth = round(depth, 1)
 
         source_entry = get_source_entry(self.source_id)
+        event_id = str(msg_data.get("eventId", "") or "")
         metadata = {
             "source_family": "fan_studio",
             "source_enum": source_entry.source_enum if source_entry else "",
@@ -43,8 +44,8 @@ class CencEarthquakeParser(BaseParser):
             if source_entry
             else "earthquake_info",
             "info_type": msg_data.get("infoTypeName", ""),
+            "event_id": event_id,
         }
-        event_id = str(msg_data.get("eventId", "") or "")
         domain_event = EarthquakeEvent(
             occurred_at=self._parse_datetime(msg_data.get("shockTime", "")),
             latitude=safe_float_convert(msg_data.get("latitude")),
@@ -179,6 +180,7 @@ class CencEarthquakeWolfxParser(BaseParser):
                 "source_type": source_entry.source_type.value
                 if source_entry
                 else "earthquake_info",
+                "event_id": event_id,
                 "updates": report_num,
                 "report_num": report_num,
                 "info_type": eq_info.get("type", ""),

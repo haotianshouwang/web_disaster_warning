@@ -11,6 +11,7 @@ from typing import Any
 
 from ...domain.event_identity import EventIdentity
 from ...domain.event_models import EarthquakeEvent, EventEnvelope
+from ...domain.event_payload import SourcePayload
 
 
 class FusionStateStore:
@@ -74,24 +75,108 @@ class FusionStateStore:
                 cache_dict.pop(event_key, None)
 
     @staticmethod
+    def _normalize_report_num(raw_value: Any) -> int:
+        """把任意报次值稳妥归一为正整数。"""
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return 1
+        except Exception:
+            return 1
+        return value if value > 0 else 1
+
+    @staticmethod
+    def normalize_cenc_measurement_type(raw_value: Any) -> str:
+        """把 CENC 测定类型统一归一为 automatic / reviewed / unknown。"""
+        value = str(raw_value or "").strip()
+        if not value:
+            return "unknown"
+
+        value_lower = value.lower()
+        if "正式测定" in value or value_lower == "reviewed":
+            return "reviewed"
+        if "自动测定" in value or value_lower == "automatic":
+            return "automatic"
+        return "unknown"
+
+    @staticmethod
+    def _extract_event_key_from_payload(payload: Any) -> str:
+        """从统一原始载荷中回退提取可用于融合的事件键。"""
+        if isinstance(payload, SourcePayload):
+            raw = payload.raw
+        elif isinstance(payload, dict):
+            raw = payload
+        else:
+            raw = {}
+
+        for key in (
+            "eventId",
+            "EventID",
+            "event_id",
+            "originId",
+            "OriginID",
+            "id",
+            "ID",
+            "md5",
+        ):
+            value = str(raw.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    @classmethod
     def get_fusion_event_key(
+        cls,
         data: EarthquakeEvent | EventEnvelope | object,
     ) -> str:
-        """融合事件键：优先统一 identity.event_id。"""
+        """融合事件键：优先 identity.event_id，其次回退 metadata/payload。"""
         if isinstance(data, EventEnvelope):
             identity = getattr(data, "identity", None)
             if isinstance(identity, EventIdentity):
                 event_id = str(identity.event_id or "").strip()
                 if event_id:
                     return event_id
+
+            payload_event_id = cls._extract_event_key_from_payload(
+                getattr(data, "payload", None)
+            )
+            if payload_event_id:
+                return payload_event_id
+
+            metadata = getattr(data, "metadata", None)
+            if isinstance(metadata, dict):
+                for key in ("event_id", "eventId", "EventID", "id", "ID", "md5"):
+                    value = str(metadata.get(key) or "").strip()
+                    if value:
+                        return value
             return str(data.id or "").strip()
+
+        if isinstance(data, EarthquakeEvent):
+            metadata = getattr(data, "metadata", None)
+            if isinstance(metadata, dict):
+                for key in (
+                    "event_id",
+                    "eventId",
+                    "EventID",
+                    "originId",
+                    "OriginID",
+                    "id",
+                    "ID",
+                    "md5",
+                ):
+                    value = str(metadata.get(key) or "").strip()
+                    if value:
+                        return value
+            return ""
+
         return str(getattr(data, "id", "") or "").strip()
 
-    @staticmethod
+    @classmethod
     def get_fusion_report_num(
+        cls,
         data: EarthquakeEvent | EventEnvelope | object,
     ) -> int:
-        """融合报次：统一依赖领域身份字段。"""
+        """融合序号：优先 identity.report_num，其次回退 metadata/payload。"""
         try:
             if isinstance(data, EventEnvelope):
                 identity = getattr(data, "identity", None)
@@ -99,22 +184,117 @@ class FusionStateStore:
                     isinstance(identity, EventIdentity)
                     and identity.report_num is not None
                 ):
-                    value = int(identity.report_num)
-                    return value if value > 0 else 1
-            return 1
-        except (TypeError, ValueError):
+                    return cls._normalize_report_num(identity.report_num)
+
+                payload = getattr(data, "payload", None)
+                raw = payload.raw if isinstance(payload, SourcePayload) else {}
+                for key in ("report_num", "ReportNum", "updates", "serial", "Serial"):
+                    if key in raw and raw.get(key) is not None:
+                        return cls._normalize_report_num(raw.get(key))
+
+                metadata = getattr(data, "metadata", None)
+                if isinstance(metadata, dict):
+                    for key in ("report_num", "updates", "serial"):
+                        if key in metadata and metadata.get(key) is not None:
+                            return cls._normalize_report_num(metadata.get(key))
+                return 1
+
+            if isinstance(data, EarthquakeEvent):
+                metadata = getattr(data, "metadata", None)
+                if isinstance(metadata, dict):
+                    for key in ("report_num", "updates", "serial"):
+                        if key in metadata and metadata.get(key) is not None:
+                            return cls._normalize_report_num(metadata.get(key))
+                return 1
+
             return 1
         except Exception:
             return 1
+
+    @classmethod
+    def select_cenc_cached_payload(
+        cls,
+        reports: dict[int, dict[str, Any]],
+        target_report: int,
+        measurement_type: str,
+    ) -> dict[str, Any] | None:
+        """选择 CENC 融合缓存：优先同测定类型，其次回退最近缓存。"""
+        if not reports:
+            return None
+
+        normalized_type = cls.normalize_cenc_measurement_type(measurement_type)
+        preferred = reports.get(target_report)
+        if isinstance(preferred, dict):
+            preferred_type = cls.normalize_cenc_measurement_type(
+                preferred.get("measurement_type")
+            )
+            if normalized_type == "unknown" or preferred_type == normalized_type:
+                return preferred
+
+        matching_candidates: list[tuple[int, dict[str, Any]]] = []
+        fallback_candidates: list[tuple[int, dict[str, Any]]] = []
+        for report_num, payload in reports.items():
+            if not isinstance(payload, dict):
+                continue
+            fallback_candidates.append((report_num, payload))
+            payload_type = cls.normalize_cenc_measurement_type(
+                payload.get("measurement_type")
+            )
+            if normalized_type != "unknown" and payload_type == normalized_type:
+                matching_candidates.append((report_num, payload))
+
+        if matching_candidates:
+            matching_candidates.sort(
+                key=lambda item: (
+                    abs(int(item[0]) - int(target_report)),
+                    -float(item[1].get("created_at", 0.0) or 0.0),
+                )
+            )
+            return matching_candidates[0][1]
+
+        if normalized_type == "unknown" and fallback_candidates:
+            fallback_candidates.sort(
+                key=lambda item: -float(item[1].get("created_at", 0.0) or 0.0)
+            )
+            return fallback_candidates[0][1]
+
+        return None
 
     @staticmethod
     def select_cached_report_payload(
         reports: dict[int, dict[str, Any]], target_report: int
     ) -> dict[str, Any] | None:
-        """按报次精确匹配缓存（仅同报次融合）。"""
+        """按报次精确匹配缓存（保留给仍按报次推进的融合链路使用）。"""
         if not reports:
             return None
         return reports.get(target_report)
+
+    @classmethod
+    def find_best_cenc_pending_key(
+        cls,
+        pending_dict: dict[str, dict[str, Any]],
+        event_key: str,
+        measurement_type: str,
+    ) -> str | None:
+        """在同 event_key 的 pending 中优先匹配同测定类型，否则回退最早等待项。"""
+        normalized_type = cls.normalize_cenc_measurement_type(measurement_type)
+        candidates = [
+            (k, v)
+            for k, v in pending_dict.items()
+            if isinstance(v, dict) and v.get("event_key") == event_key
+        ]
+        if not candidates:
+            return None
+
+        typed_candidates = [
+            (k, v)
+            for k, v in candidates
+            if cls.normalize_cenc_measurement_type(v.get("measurement_type"))
+            == normalized_type
+        ]
+        selected = typed_candidates or candidates
+        selected.sort(key=lambda item: float(item[1].get("created_at", 0.0) or 0.0))
+        return selected[0][0]
 
     @staticmethod
     def find_best_pending_key(

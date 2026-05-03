@@ -56,11 +56,16 @@ class EventIdentityService:
     def resolve_report_num(cls, event: EventEnvelope) -> int | None:
         """统一解析地震报次。
 
-        优先读取领域身份中的显式报次，缺失时再回退到数据源目录指定的元数据字段。
+        优先读取领域身份中的显式报次，缺失时再回退到目录字段与常见兼容键名。
         """
         identity = getattr(event, "identity", None)
         if isinstance(identity, EventIdentity) and identity.report_num is not None:
-            return identity.report_num
+            try:
+                value = int(identity.report_num)
+            except (TypeError, ValueError):
+                value = None
+            if isinstance(value, int) and value > 0:
+                return value
 
         source_entry = cls.get_source_entry_for_event(event)
         report_field_name = (
@@ -69,14 +74,36 @@ class EventIdentityService:
             else ""
         )
 
+        domain_metadata = getattr(getattr(event, "event", None), "metadata", None)
+        envelope_metadata = getattr(event, "metadata", None)
+        payload = getattr(event, "payload", None)
+        payload_raw = getattr(payload, "raw", None)
+        payload_attributes = getattr(payload, "attributes", None)
+
         candidates: list[Any] = []
+        field_names: list[str] = []
         if report_field_name:
-            domain_metadata = getattr(getattr(event, "event", None), "metadata", None)
-            envelope_metadata = getattr(event, "metadata", None)
+            field_names.append(str(report_field_name))
+        for fallback_name in (
+            "report_num",
+            "ReportNum",
+            "updates",
+            "serial",
+            "Serial",
+            "serialNo",
+        ):
+            if fallback_name not in field_names:
+                field_names.append(fallback_name)
+
+        for field_name in field_names:
             if isinstance(domain_metadata, dict):
-                candidates.append(domain_metadata.get(report_field_name))
+                candidates.append(domain_metadata.get(field_name))
             if isinstance(envelope_metadata, dict):
-                candidates.append(envelope_metadata.get(report_field_name))
+                candidates.append(envelope_metadata.get(field_name))
+            if isinstance(payload_attributes, dict):
+                candidates.append(payload_attributes.get(field_name))
+            if isinstance(payload_raw, dict):
+                candidates.append(payload_raw.get(field_name))
 
         for candidate in candidates:
             try:
