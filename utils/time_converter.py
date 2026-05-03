@@ -41,11 +41,11 @@ class TimeConverter:
         """
         解析各种格式的时间输入为 datetime 对象
 
-        Args:
-            time_input: 时间字符串、时间戳(秒/毫秒)、datetime对象或None
+        参数说明：
+        - time_input：时间字符串、时间戳（秒或毫秒）、datetime 对象或 None
 
-        Returns:
-            datetime对象 (可能是 Naive 或 Aware)，解析失败返回 None
+        返回值：
+        - datetime 对象（可能是 Naive 或 Aware），解析失败时返回 None
         """
         if time_input is None:
             return None

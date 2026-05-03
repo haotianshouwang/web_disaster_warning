@@ -74,9 +74,18 @@ class DisasterServiceCacheService:
                 return
 
             restored: dict[str, dict[str, Any]] = {}
+            active_state = getattr(self.service, "eew_query_state", {})
+            if isinstance(active_state, dict) and active_state:
+                supported_institutions = set(active_state.keys())
+            else:
+                institutions = getattr(
+                    self.service.eew_query_service, "institutions", {}
+                )
+                supported_institutions = set(institutions.keys())
+
             for key, value in data.items():
                 # 仅恢复当前仍受支持的机构键，避免历史版本缓存污染现有状态结构。
-                if key not in self.service._EEW_QUERY_INSTITUTIONS:
+                if supported_institutions and key not in supported_institutions:
                     continue
                 if not isinstance(value, dict):
                     continue

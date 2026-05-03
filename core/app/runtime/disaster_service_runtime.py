@@ -11,12 +11,22 @@ import json
 
 from astrbot.api import logger
 
+from ...services.query.source_runtime_query_service import SourceRuntimeQueryService
+
 
 class DisasterServiceRuntimeService:
-    """灾害服务运行时编排服务。"""
+    """灾害服务运行时编排服务。
+
+    该类负责承接“服务启动后持续发生”的运行期行为：
+    例如 WebSocket 建连、Wolfx HTTP 轮询、日常清理任务等。
+    这类逻辑通常都带有异步循环或后台任务特征，单独拆出后更便于维护与停机回收。
+    """
 
     def __init__(self, service):
+        # 保留主服务引用，运行期任务需要读取连接计划、消息管理器、解析器与运行标志位。
         self.service = service
+        # 查询服务用于判断某个数据源是否启用，避免对已禁用源继续做解析与事件投递。
+        self._source_runtime_query = SourceRuntimeQueryService(service.config)
 
     async def establish_websocket_connections(self) -> None:
         """建立 WebSocket 连接。"""
@@ -25,6 +35,8 @@ class DisasterServiceRuntimeService:
         )
 
         async def _connect_with_timeout(name, uri, info):
+            # 这里封装成局部协程，是为了让每个连接都能作为独立任务运行，
+            # 并在日志中清晰标识是哪一个连接任务异常终止。
             try:
                 await self.service.ws_manager.connect(
                     name=name,
@@ -35,14 +47,15 @@ class DisasterServiceRuntimeService:
                 logger.error(f"[灾害预警] WebSocket 连接任务 {name} 异常终止: {e}")
 
         for conn_name, conn_config in self.service.connections.items():
-            # 这里只处理由连接计划生成的 WebSocket 型连接；具体重连由 ws_manager 内部维护。
+            # 这里只处理由连接计划生成的 WebSocket 连接；
+            # 具体断线重连、备用地址切换等细节由连接管理器内部负责。
             if conn_config["handler"] in ["fan_studio", "p2p", "wolfx", "global_quake"]:
+                # 这份连接附加信息会一路传入连接管理器，作为连接状态展示、重连通知、
+                # 管理端查询等场景的上下文信息。
                 connection_info = {
                     "connection_name": conn_name,
                     "handler_type": conn_config["handler"],
-                    "data_source": self.service.get_data_source_from_connection(
-                        conn_name
-                    ),
+                    "data_source": conn_config.get("data_source", conn_name),
                     "established_time": None,
                     "backup_url": conn_config.get("backup_url"),
                 }
@@ -72,11 +85,15 @@ class DisasterServiceRuntimeService:
         """启动定时 HTTP 数据获取。"""
 
         async def fetch_wolfx_data():
+            # Wolfx 列表属于低频补偿型数据：
+            # 一方面用于补齐地震列表缓存，另一方面在对应数据源启用时也可转成事件，
+            # 为未通过实时流捕获到的列表更新提供兜底入口。
             while self.service.running:
                 try:
                     # 固定 5 分钟轮询 Wolfx 列表接口，用于补充列表缓存与低频事件补偿。
                     await asyncio.sleep(300)
 
+                    # 抓取器由主服务统一创建，这里通过上下文协议复用其会话资源。
                     async with self.service.http_fetcher as fetcher:
                         try:
                             cenc_data = await asyncio.wait_for(
@@ -86,20 +103,21 @@ class DisasterServiceRuntimeService:
                                 timeout=60,
                             )
                             if cenc_data:
-                                self.service.update_earthquake_list("cenc", cenc_data)
-                                # 若对应数据源启用，则尝试把列表结果再喂给 handler 生成事件，统一进入主处理流水线。
-                                if self.service.is_wolfx_source_enabled(
-                                    "china_cenc_earthquake"
+                                # 无论后续是否转成事件，都先刷新本地列表缓存，
+                                # 这样查询接口总能拿到尽可能新的列表内容。
+                                self.service.earthquake_list_service.update_earthquake_list(
+                                    "cenc", cenc_data
+                                )
+                                if self._source_runtime_query.is_source_enabled(
+                                    "cenc_wolfx"
                                 ):
-                                    handler = self.service.handlers.get("cenc_wolfx")
-                                    if handler:
-                                        event = handler.parse_message(
-                                            json.dumps(cenc_data)
-                                        )
-                                        if event:
-                                            await self.service._handle_disaster_event(
-                                                event
-                                            )
+                                    # 这里将 HTTP 返回结果重新整理为解析器可接受的消息内容，
+                                    # 复用既有解析链路，避免在运行时服务中重复实现业务转换逻辑。
+                                    event = self.service.parse_event(
+                                        "cenc_wolfx", json.dumps(cenc_data)
+                                    )
+                                    if event:
+                                        await self.service._handle_disaster_event(event)
                         except asyncio.TimeoutError:
                             logger.warning(
                                 "[灾害预警] 定时获取 CENC 地震列表超时，保留原有缓存"
@@ -115,21 +133,17 @@ class DisasterServiceRuntimeService:
                                 timeout=60,
                             )
                             if jma_data:
-                                self.service.update_earthquake_list("jma", jma_data)
-                                if self.service.is_wolfx_source_enabled(
-                                    "japan_jma_earthquake"
+                                self.service.earthquake_list_service.update_earthquake_list(
+                                    "jma", jma_data
+                                )
+                                if self._source_runtime_query.is_source_enabled(
+                                    "jma_wolfx_info"
                                 ):
-                                    handler = self.service.handlers.get(
-                                        "jma_wolfx_info"
+                                    event = self.service.parse_event(
+                                        "jma_wolfx_info", json.dumps(jma_data)
                                     )
-                                    if handler:
-                                        event = handler.parse_message(
-                                            json.dumps(jma_data)
-                                        )
-                                        if event:
-                                            await self.service._handle_disaster_event(
-                                                event
-                                            )
+                                    if event:
+                                        await self.service._handle_disaster_event(event)
                         except asyncio.TimeoutError:
                             logger.warning(
                                 "[灾害预警] 定时获取 JMA 地震列表超时，保留原有缓存"
@@ -138,7 +152,8 @@ class DisasterServiceRuntimeService:
                             logger.error(f"[灾害预警] 获取 JMA 数据出错: {e}")
 
                 except Exception as e:
-                    logger.error(f"[灾害预警] 定时HTTP数据获取失败: {e}")
+                    # 外层兜底保证后台循环不会因单次异常直接退出。
+                    logger.error(f"[灾害预警] 定时 HTTP 数据获取失败: {e}")
 
         task = asyncio.create_task(fetch_wolfx_data(), name="dw_http_fetch_wolfx")
         self.service.scheduled_tasks.append(task)

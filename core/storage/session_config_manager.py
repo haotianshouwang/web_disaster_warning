@@ -19,12 +19,17 @@ from astrbot.api.star import StarTools
 
 
 class SessionConfigManager:
-    """会话差异配置管理器"""
+    """会话差异配置管理器。
+
+    负责维护“全局默认配置 + 会话覆写补丁”的存储模式，
+    提供差异计算、白名单清洗、兼容迁移与生效配置合并能力。
+    """
 
     OVERRIDES_FILE = "session_overrides.json"
     LEGACY_FULL_CONFIGS_FILE = "session_configs.json"
 
-    # 可覆写字段白名单（顶层键）
+    # 可覆写字段白名单（顶层键）。
+    # 这里只允许保留会话级局部配置，避免误把全局运行参数写入单个会话补丁。
     ALLOWED_ROOT_KEYS = {
         "enabled",
         "display_timezone",
@@ -41,6 +46,7 @@ class SessionConfigManager:
     }
 
     def __init__(self, default_config_ref: dict[str, Any]):
+        """初始化会话配置管理器并加载已保存的差异补丁。"""
         self.default_config_ref = default_config_ref
         self.storage_dir = StarTools.get_data_dir("astrbot_plugin_disaster_warning")
         self.overrides_file = os.path.join(self.storage_dir, self.OVERRIDES_FILE)
@@ -52,6 +58,7 @@ class SessionConfigManager:
         self._load()
 
     def _ensure_storage_dir(self) -> None:
+        """确保会话配置存储目录存在。"""
         if not os.path.exists(self.storage_dir):
             os.makedirs(self.storage_dir, exist_ok=True)
 
@@ -60,6 +67,7 @@ class SessionConfigManager:
         self._ensure_storage_dir()
 
         if os.path.exists(self.overrides_file):
+            # 优先读取新的差异补丁文件；读取成功后就不再继续处理旧格式迁移。
             try:
                 with open(self.overrides_file, encoding="utf-8") as f:
                     data = json.load(f)
@@ -73,6 +81,8 @@ class SessionConfigManager:
 
         self._overrides = {}
 
+        # 新格式不存在时，再尝试兼容旧版“按会话保存完整配置”的历史文件。
+        # 迁移完成后会统一落为差异补丁，减少后续默认配置变化带来的冗余存储。
         # 兼容旧格式: session_configs.json (存的是完整配置)
         if os.path.exists(self.legacy_full_configs_file):
             try:
@@ -100,6 +110,7 @@ class SessionConfigManager:
                 logger.warning(f"[灾害预警] 迁移旧会话配置失败: {e}")
 
     def _save(self) -> None:
+        """以临时文件替换方式保存差异补丁，尽量降低写入中断风险。"""
         self._ensure_storage_dir()
         temp_file = self.overrides_file + ".tmp"
         try:
@@ -118,27 +129,33 @@ class SessionConfigManager:
                     pass
 
     def _default_config_dict(self) -> dict[str, Any]:
+        """获取当前全局默认配置的深拷贝。"""
         return copy.deepcopy(dict(self.default_config_ref))
 
     def list_target_sessions(self) -> list[str]:
+        """列出全局配置中声明的目标会话。"""
         sessions = self.default_config_ref.get("target_sessions", [])
         if not isinstance(sessions, list):
             return []
         return [s for s in sessions if isinstance(s, str) and s]
 
     def list_all_known_sessions(self) -> list[str]:
+        """列出当前已知的全部会话标识。"""
         sessions = set(self.list_target_sessions())
         sessions.update(self._overrides.keys())
         return sorted(sessions)
 
     def get_override(self, umo: str) -> dict[str, Any]:
+        """获取指定会话的差异补丁副本。"""
         override = self._overrides.get(umo, {})
         return copy.deepcopy(override)
 
     def set_override(self, umo: str, override_patch: dict[str, Any]) -> None:
+        """设置指定会话的差异补丁。"""
         if not isinstance(override_patch, dict):
             raise ValueError("override_patch 必须是对象")
 
+        # 保存前再次执行白名单清洗，避免调用方传入越界字段污染存储层。
         patch = self._sanitize_patch(copy.deepcopy(override_patch))
         if patch:
             self._overrides[umo] = patch
@@ -148,13 +165,16 @@ class SessionConfigManager:
         self._save()
 
     def delete_override(self, umo: str) -> None:
+        """删除指定会话的差异补丁。"""
         self._overrides.pop(umo, None)
         self._save()
 
     def get_effective_config(self, umo: str) -> dict[str, Any]:
+        """获取指定会话最终生效的配置。"""
         default_conf = self._default_config_dict()
         override = self._overrides.get(umo, {})
 
+        # 生效配置由“全局默认值 + 会话差异补丁”递归合并得到。
         effective = self.deep_merge(default_conf, override)
         # 会话级推送总开关，默认继承为 True
         if "push_enabled" not in effective:
@@ -164,6 +184,7 @@ class SessionConfigManager:
     def update_session_from_effective(
         self, umo: str, effective_config: dict[str, Any]
     ) -> None:
+        """根据提交的生效配置反推并保存差异补丁。"""
         if not isinstance(effective_config, dict):
             raise ValueError("effective_config 必须是对象")
 
@@ -197,6 +218,7 @@ class SessionConfigManager:
     def compute_diff(cls, default_obj: Any, target_obj: Any) -> Any:
         """计算 target 相对 default 的差异补丁。"""
         if isinstance(default_obj, dict) and isinstance(target_obj, dict):
+            # 仅保留与默认值不同的部分，得到最小差异补丁。
             result: dict[str, Any] = {}
             for key, value in target_obj.items():
                 if key not in default_obj:
@@ -228,6 +250,7 @@ class SessionConfigManager:
 
         sanitized: dict[str, Any] = {}
         for key, val in patch.items():
+            # 顶层做白名单裁剪，深层则保留对应配置块内部的细分字段。
             if depth == 0 and key not in self.ALLOWED_ROOT_KEYS:
                 continue
             child = self._sanitize_patch(val, depth + 1)

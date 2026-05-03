@@ -17,6 +17,7 @@ class RenderImageCache:
     """渲染图片缓存器。"""
 
     def __init__(self, ttl_seconds: int = 180):
+        # _image_cache 保存已完成渲染结果，_inflight_tasks 用于并发去重。
         self._ttl_seconds = ttl_seconds
         self._image_cache: dict[str, tuple[float, str]] = {}
         self._inflight_tasks: dict[str, asyncio.Task[str | None]] = {}

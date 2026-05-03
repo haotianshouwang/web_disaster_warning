@@ -38,17 +38,22 @@ async def fetch_location_from_ip(
     """
     通过 IP 地址获取地理位置信息
 
-    :param ip: IP 地址，如果为 None 则自动使用请求者的 IP
-    :param session: 可选的 aiohttp.ClientSession 实例；如果为 None，则使用模块级共享会话以复用连接
-    :return: 包含经纬度和地址信息的字典
-    :raises: Exception 如果请求失败
+    参数说明：
+    - ip：IP 地址；如果为 None，则自动使用请求者的 IP
+    - session：可选的 aiohttp.ClientSession 实例；如果为 None，则使用模块级共享会话以复用连接
+
+    返回值：
+    - 包含经纬度和地址信息的字典
+
+    异常说明：
+    - 请求失败时抛出异常
     """
     api_url = "https://api.wolfx.jp/geoip.php"
     params = {}
     if ip:
         params["ip"] = ip
 
-    # 如果外部未提供 session，则使用模块级共享 session 以避免每次请求都新建连接
+    # 如果外部未提供 session，则使用模块级共享会话，避免每次请求都新建连接。
     if session is None:
         session = await get_geoip_session()
 
@@ -63,7 +68,7 @@ async def fetch_location_from_ip(
 
             data = await response.json()
 
-            # 提取需要的字段
+            # 提取后续定位展示所需的核心字段。
             result = {
                 "ip": data.get("ip", ""),
                 "latitude": data.get("latitude"),
@@ -73,7 +78,7 @@ async def fetch_location_from_ip(
                 "city_zh": data.get("city_zh", ""),
             }
 
-            # 验证经纬度是否有效
+            # 验证经纬度是否有效。
             if result["latitude"] is None or result["longitude"] is None:
                 error_msg = "API 返回的数据中缺少经纬度信息"
                 logger.warning(f"[灾害预警] {error_msg}")

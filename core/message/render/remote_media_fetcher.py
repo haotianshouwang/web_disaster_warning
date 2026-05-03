@@ -19,6 +19,7 @@ class RemoteMediaFetcher:
         image_type_checker: Callable[[str | None], bool],
         content_type_guesser: Callable[[str | None], str | None],
     ):
+        # 抓取器通过注入回调访问网络会话与内容类型判定能力，保持自身轻量。
         self._session_getter = session_getter
         self._image_type_checker = image_type_checker
         self._content_type_guesser = content_type_guesser
@@ -48,6 +49,7 @@ class RemoteMediaFetcher:
         try:
             session = await self._session_getter(timeout_seconds)
             async with session.get(normalized_url, allow_redirects=True) as response:
+                # 把最终跳转地址、状态码与响应头统一记录下来，便于上层诊断抓取失败原因。
                 result["status"] = response.status
                 result["final_url"] = str(response.url)
                 result["content_type"] = response.headers.get("Content-Type")

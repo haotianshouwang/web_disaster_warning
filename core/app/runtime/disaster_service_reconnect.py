@@ -10,9 +10,14 @@ from astrbot.api import logger
 
 
 class DisasterServiceReconnectService:
-    """灾害服务手动重连编排服务。"""
+    """灾害服务手动重连编排服务。
+
+    该服务主要面向管理端或运维指令场景：
+    当用户希望立刻对离线连接发起一次主动重连时，统一由这里完成状态检查与底层调用。
+    """
 
     def __init__(self, service):
+        # 主服务中维护了连接计划与连接管理器，本服务只负责在其之上做重连编排。
         self.service = service
 
     async def reconnect_all_sources(self) -> dict[str, str]:
@@ -29,6 +34,8 @@ class DisasterServiceReconnectService:
                 continue
 
             try:
+                # 某些连接可能尚未完成首次建连，因此连接管理器内部还没有对应附加信息；
+                # 在强制重连前先补齐这些字段，方便底层重连逻辑与状态展示复用。
                 self._ensure_connection_info(conn_name, conn_config)
                 triggered = await self._force_reconnect(conn_name)
                 if triggered:
@@ -51,17 +58,19 @@ class DisasterServiceReconnectService:
         return not ws.closed
 
     def _ensure_connection_info(self, conn_name: str, conn_config: dict) -> None:
-        """确保 WebSocketManager 中存在连接元信息。"""
+        """确保连接管理器中存在连接附加信息。"""
         if conn_name in self.service.ws_manager.connection_info:
             return
 
         connection_info = {
             "connection_name": conn_name,
             "handler_type": conn_config["handler"],
-            "data_source": self.service.get_data_source_from_connection(conn_name),
+            "data_source": conn_config.get("data_source", conn_name),
             "established_time": None,
             "backup_url": conn_config.get("backup_url"),
         }
+        # 这里的结构与连接管理器常规建连流程保持一致，
+        # 这样手动重连与自动重连在读取附加信息时不会出现字段缺失的问题。
         self.service.ws_manager.connection_info[conn_name] = {
             "uri": conn_config["url"],
             "headers": None,
@@ -73,6 +82,8 @@ class DisasterServiceReconnectService:
 
     async def _force_reconnect(self, conn_name: str) -> bool:
         """调用 WebSocketManager 执行强制重连。"""
+        # 并非所有连接管理器实现都强制要求提供该接口，
+        # 因此这里先做能力检查，再决定是否触发主动重连。
         if not hasattr(self.service.ws_manager, "force_reconnect"):
             return False
         return await self.service.ws_manager.force_reconnect(conn_name)
