@@ -44,6 +44,7 @@ class CEAEEWParser(BaseParser):
             "source_type": source_entry.source_type.value
             if source_entry
             else "earthquake_warning",
+            "event_id": event_id,
             "province": msg_data.get("province"),
             "report_num": report_num,
             "is_final": bool(msg_data.get("isFinal", False)),
@@ -119,6 +120,9 @@ class CEAEEWParser(BaseParser):
 
             envelope.metadata.update(
                 {
+                    "event_id": str(
+                        msg_data.get("eventId", "") or msg_data.get("id", "") or ""
+                    ),
                     "province": msg_data.get("province"),
                     "report_num": report_num,
                     "is_final": bool(msg_data.get("isFinal", False)),
@@ -140,7 +144,7 @@ class CEAEEWPRParser(CEAEEWParser):
     """中国地震预警网省级解析器，处理 FAN Studio 来源数据。"""
 
     def __init__(self, message_logger=None):
-        super().__init__(message_logger, source_id="cea_pr_fanstudio")
+        super().__init__(message_logger=message_logger, source_id="cea_pr_fanstudio")
 
 
 class CEAEEWWolfxParser(BaseParser):
@@ -166,12 +170,14 @@ class CEAEEWWolfxParser(BaseParser):
                 report_num = 1
 
             source_entry = get_source_entry(self.source_id)
+            event_id = str(data.get("EventID", "") or "")
             metadata = {
                 "source_family": "wolfx",
                 "source_enum": source_entry.source_enum if source_entry else "",
                 "source_type": source_entry.source_type.value
                 if source_entry
                 else "earthquake_warning",
+                "event_id": event_id,
                 "report_num": report_num,
                 "updates": report_num,
                 "is_final": bool(data.get("isFinal", False)),
@@ -187,7 +193,7 @@ class CEAEEWWolfxParser(BaseParser):
                 metadata=dict(metadata),
             )
             identity = EventIdentity(
-                event_id=str(data.get("EventID", "") or ""),
+                event_id=event_id,
                 source_id=self.source_id,
                 event_type="earthquake_warning",
                 provider_family=source_entry.provider_family.value

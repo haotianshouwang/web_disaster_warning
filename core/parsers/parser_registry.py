@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from ..sources.source_catalog import SOURCE_CATALOG, get_source_entry
 from .china_earthquake_parser import CencEarthquakeParser
-from .china_eew_parser import CEAEEWParser
+from .china_eew_parser import CEAEEWParser, CEAEEWPRParser, CEAEEWWolfxParser
 from .global_sources_parser import GlobalQuakeParser, UsgsEarthquakeParser
 from .japan_earthquake_parser import JmaEarthquakeP2PParser, JmaEarthquakeWolfxParser
 from .japan_eew_parser import JmaEewFanStudioParser, JmaEewP2PParser, JmaEewWolfxParser
@@ -44,6 +44,17 @@ def create_parser_for_source(source_id: str, *args, **kwargs):
     entry = get_source_entry(source_id)
     if entry is None:
         return None
+
+    # 同名 parser 可能对应多个具体来源实现，这里按 source_id 再做一次细分分派。
+    if entry.parser_name == "china_eew_parser":
+        parser_class = {
+            "cea_fanstudio": CEAEEWParser,
+            "cea_pr_fanstudio": CEAEEWPRParser,
+            "cea_wolfx": CEAEEWWolfxParser,
+        }.get(source_id)
+        if parser_class is None:
+            return None
+        return parser_class(*args, **kwargs)
 
     # 日本预警与日本地震情报会按具体来源拆成多个解析器实现，因此这里再做一次细分分派。
     if entry.parser_name == "japan_eew_parser":
