@@ -108,6 +108,12 @@ def build_earthquake_display_context(projection: dict, options: dict | None = No
     metadata = projection["metadata"]
     title = projection["title"]
     domain_event = envelope.event
+    display_options = dict(options or {})
+    local_monitoring_config = display_options.get("local_monitoring", {})
+    local_monitoring_enabled = bool(
+        isinstance(local_monitoring_config, dict)
+        and local_monitoring_config.get("enabled", False)
+    )
 
     domain_details = _extract_earthquake_domain_details(
         domain_event,
@@ -117,7 +123,11 @@ def build_earthquake_display_context(projection: dict, options: dict | None = No
     )
     domain_province = str(domain_details["province"] or "")
     domain_info_type = str(domain_details["info_type"] or "")
-    local_estimation = first_non_empty(metadata.get("local_estimation"))
+    local_estimation = (
+        first_non_empty(metadata.get("local_estimation"))
+        if local_monitoring_enabled
+        else None
+    )
     payload_details = _extract_earthquake_projection_details(
         metadata,
         domain_province,
@@ -197,7 +207,7 @@ def build_earthquake_display_context(projection: dict, options: dict | None = No
             extras=dict(display_metadata),
         ),
         metadata=display_metadata,
-        options=dict(options or {}),
+        options=display_options,
         source_descriptor=source_descriptor,
         payload=source_payload,
     )

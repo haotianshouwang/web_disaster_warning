@@ -62,12 +62,16 @@ def normalize_projection_metadata(
     source_payload_input = getattr(envelope, "payload", None)
     metadata_payload = getattr(envelope, "metadata", None)
     metadata = dict(metadata_payload) if isinstance(metadata_payload, dict) else {}
-    return (
+    source_payload = (
         source_payload_input
         if isinstance(source_payload_input, SourcePayload)
-        else None,
-        metadata,
+        else None
     )
+    if source_payload is not None and isinstance(source_payload.attributes, dict):
+        merged = dict(source_payload.attributes)
+        merged.update(metadata)
+        metadata = merged
+    return source_payload, metadata
 
 
 def resolve_projection_source_id(event: EventEnvelope, source_id: str) -> str:

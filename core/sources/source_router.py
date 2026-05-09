@@ -183,8 +183,24 @@ def route_fan_studio_message(data: dict[str, Any]) -> list[RoutedMessage]:
         return routed_messages
 
     if msg_type == "update":
-        # update 表示显式来源的单条增量更新，可直接按 source 字段映射。
+        # update 消息虽然通常携带显式 source，但像 cea / cea-pr 这类同族来源
+        # 仍可能共用同一个外层 source 值，因此优先结合载荷特征做精确识别。
         source_name = str(data.get("source") or "").strip()
+        detected_entry = detect_fan_studio_source_entry(data)
+        if detected_entry is not None:
+            routed_source_name = (
+                detected_entry.provider_source_names[0]
+                if detected_entry.provider_source_names
+                else source_name or detected_entry.source_id
+            )
+            return [
+                RoutedMessage(
+                    source_name=routed_source_name,
+                    source_id=detected_entry.source_id,
+                    payload=data,
+                )
+            ]
+
         source_id = get_fan_studio_source_id(source_name)
         if source_name and source_id:
             return [

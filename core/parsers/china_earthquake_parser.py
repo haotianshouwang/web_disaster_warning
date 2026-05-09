@@ -36,6 +36,7 @@ class CencEarthquakeParser(BaseParser):
             depth = round(depth, 1)
 
         source_entry = get_source_entry(self.source_id)
+        event_id = str(msg_data.get("eventId", "") or "")
         metadata = {
             "source_family": "fan_studio",
             "source_enum": source_entry.source_enum if source_entry else "",
@@ -43,8 +44,8 @@ class CencEarthquakeParser(BaseParser):
             if source_entry
             else "earthquake_info",
             "info_type": msg_data.get("infoTypeName", ""),
+            "event_id": event_id,
         }
-        event_id = str(msg_data.get("eventId", "") or "")
         domain_event = EarthquakeEvent(
             occurred_at=self._parse_datetime(msg_data.get("shockTime", "")),
             latitude=safe_float_convert(msg_data.get("latitude")),
@@ -128,9 +129,21 @@ class CencEarthquakeWolfxParser(BaseParser):
     def _parse_data(self, data: dict[str, Any]) -> EventEnvelope | None:
         """解析 Wolfx 中国地震台网地震列表。"""
         try:
-            # Wolfx 列表消息里可能混有其他类型，此处仅接收中国地震列表数据。
-            if data.get("type") != "cenc_eqlist":
+            # WebSocket 标准消息通常会带 type=cenc_eqlist，
+            # 但 HTTP 列表接口可能直接返回 No1/No2... 结构而没有顶层 type。
+            raw_type = str(data.get("type") or "").strip()
+            no_keys = [
+                key
+                for key, value in data.items()
+                if key.startswith("No") and isinstance(value, dict)
+            ]
+            if raw_type and raw_type != "cenc_eqlist":
                 logger.debug(f"[灾害预警] {self.source_id} 非 CENC 地震列表数据，跳过")
+                return None
+            if not raw_type and not no_keys:
+                logger.debug(
+                    f"[灾害预警] {self.source_id} 未识别到 Wolfx CENC 列表结构，跳过"
+                )
                 return None
 
             eq_info = None
@@ -141,6 +154,9 @@ class CencEarthquakeWolfxParser(BaseParser):
                     break
 
             if not eq_info:
+                logger.warning(
+                    f"[灾害预警] {self.source_id} 这次收到的 Wolfx CENC 列表里没有找到可解析的地震条目"
+                )
                 return None
 
             event_id = str(
@@ -154,20 +170,11 @@ class CencEarthquakeWolfxParser(BaseParser):
                 or ""
             ).strip()
 
-            raw_report_num = (
-                eq_info.get("updates")
-                or eq_info.get("reportNum")
-                or eq_info.get("ReportNum")
-                or eq_info.get("serial")
-                or eq_info.get("Serial")
-                or 1
-            )
-            try:
-                report_num = int(raw_report_num)
-            except (TypeError, ValueError):
-                report_num = 1
-            if report_num <= 0:
-                report_num = 1
+            # CENC 地震测定链路并不存在稳定的“第几报”语义。
+            # Wolfx cenc_eqlist 文档仅提供列表项与 md5/intensity/type 等字段，
+            # 重构后继续沿用 EEW/JMA 的报次分槽会把同一事件错误拆成多个缓存槽位，
+            # 反而降低 Fan/Wolfx 融合命中率，因此统一回退为单槽 1。
+            report_num = 1
 
             source_record_id = str(eq_info.get("md5") or event_id or "").strip()
 
@@ -179,6 +186,7 @@ class CencEarthquakeWolfxParser(BaseParser):
                 "source_type": source_entry.source_type.value
                 if source_entry
                 else "earthquake_info",
+                "event_id": event_id,
                 "updates": report_num,
                 "report_num": report_num,
                 "info_type": eq_info.get("type", ""),

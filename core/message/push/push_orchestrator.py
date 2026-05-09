@@ -44,11 +44,11 @@ class PushOrchestrator:
         # 方便后续扩展新的融合策略类型。
         strategy_key_map = {
             "cenc_intensity": "cenc_fusion",
-            "cwa_impact_area": "cwa_eew_fusion",
+            "cwa_scale": "cwa_eew_fusion",
         }
         service_map = {
             "cenc_intensity": self._cenc_fusion_service,
-            "cwa_impact_area": self._cwa_eew_fusion_service,
+            "cwa_scale": self._cwa_eew_fusion_service,
         }
         strategy_key = strategy_key_map.get(fusion_group)
         fusion_service = service_map.get(fusion_group)
@@ -77,7 +77,7 @@ class PushOrchestrator:
             # 不同融合策略对等待另一侧消息的默认超时时间不同。
             timeout_default_map = {
                 "cenc_intensity": 10,
-                "cwa_impact_area": 6,
+                "cwa_scale": 6,
             }
             if entry.fusion_role == FusionRole.SECONDARY:
                 # 次级来源事件先进入融合拦截流程，

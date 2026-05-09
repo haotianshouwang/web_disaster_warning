@@ -11,6 +11,7 @@ import time
 from astrbot.api import logger
 
 from ...domain.event_models import EarthquakeEvent, EventEnvelope
+from ...domain.event_payload import SourcePayload
 
 
 class CENCFusionService:
@@ -29,6 +30,65 @@ class CENCFusionService:
         if isinstance(data, EarthquakeEvent):
             return data
         return None
+
+    @staticmethod
+    def _ensure_source_payload(event: EventEnvelope) -> SourcePayload:
+        """确保事件上挂载统一原始载荷对象。"""
+        payload = event.payload
+        if isinstance(payload, SourcePayload):
+            return payload
+        source_payload = SourcePayload(
+            source_id=event.source_id or "",
+            raw=dict(payload) if isinstance(payload, dict) else {},
+        )
+        event.payload = source_payload
+        return source_payload
+
+    @classmethod
+    def _apply_intensity(
+        cls,
+        event: EventEnvelope,
+        earthquake: EarthquakeEvent,
+        intensity: float,
+    ) -> None:
+        """把融合得到的烈度写回载荷、事件元数据与领域对象。"""
+        source_payload = cls._ensure_source_payload(event)
+        source_payload.raw["intensity"] = intensity
+        source_payload.attributes["intensity"] = intensity
+        if isinstance(event.metadata, dict):
+            event.metadata["intensity"] = intensity
+        if isinstance(getattr(earthquake, "metadata", None), dict):
+            earthquake.metadata["intensity"] = intensity
+        earthquake.intensity = intensity
+
+    def _resolve_measurement_type(self, event: EventEnvelope) -> str:
+        """解析 CENC 测定类型，统一为 automatic / reviewed / unknown。"""
+        source_payload = type(self)._ensure_source_payload(event)
+        raw = source_payload.raw if isinstance(source_payload.raw, dict) else {}
+        metadata = event.metadata if isinstance(event.metadata, dict) else {}
+        earthquake = type(self)._get_earthquake_data(event)
+        earthquake_metadata = (
+            getattr(earthquake, "metadata", None)
+            if isinstance(getattr(earthquake, "metadata", None), dict)
+            else {}
+        )
+
+        candidates = [
+            metadata.get("info_type"),
+            earthquake_metadata.get("info_type"),
+            source_payload.attributes.get("info_type"),
+            raw.get("infoTypeName"),
+            raw.get("type"),
+        ]
+        for candidate in candidates:
+            normalized = (
+                self.manager._fusion_state_store.normalize_cenc_measurement_type(
+                    candidate
+                )
+            )
+            if normalized != "unknown":
+                return normalized
+        return "unknown"
 
     async def intercept_fan_event(
         self,
@@ -50,16 +110,26 @@ class CENCFusionService:
         store = self.manager._fusion_state_store
         store.prune()
 
-        event_key = store.get_fusion_event_key(earthquake)
-        report_num = store.get_fusion_report_num(earthquake)
-        cached_payload = store.select_cached_report_payload(
-            store.cenc_wolfx_cache.get(event_key, {}), report_num
+        event_key = store.get_fusion_event_key(event)
+        report_num = store.get_fusion_report_num(event)
+        measurement_type = self._resolve_measurement_type(event)
+        similarity_profile = store.build_cenc_similarity_profile(event)
+        cached_payload = store.select_cenc_cached_payload(
+            store.cenc_wolfx_cache.get(event_key, {}), report_num, measurement_type
         )
+        if cached_payload is None:
+            cached_payload = store.select_cenc_cached_payload_from_all(
+                store.cenc_wolfx_cache,
+                report_num,
+                measurement_type,
+                similarity_profile,
+            )
         if (
             isinstance(cached_payload, dict)
             and cached_payload.get("intensity") is not None
         ):
-            earthquake.intensity = cached_payload["intensity"]
+            intensity = cached_payload["intensity"]
+            type(self)._apply_intensity(event, earthquake, intensity)
             logger.info(
                 f"[灾害预警] 融合策略: Fan CENC 事件 {event.id} 命中 Wolfx 缓存并补充烈度: {earthquake.intensity}"
             )
@@ -70,12 +140,12 @@ class CENCFusionService:
             )
 
         logger.info(
-            f"[灾害预警] 融合策略: 拦截 Fan CENC 事件 {event.id} (event_key={event_key}, report={report_num})，等待 Wolfx 补充 ({timeout}s)..."
+            f"[灾害预警] 融合策略: 拦截 Fan CENC 事件 {event.id}，事件标识为 {event_key}，兼容槽位序号为 {report_num}，测定类型为 {measurement_type}，等待 Wolfx 补充（{timeout} 秒）..."
         )
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        # pending_key 需要足够唯一，避免同一事件同一报次的并发等待互相覆盖。
+        # pending_key 需要足够唯一；这里保留 report_num 作为槽位片段，仅用于兼容旧结构与同事件并发隔离。
         pending_key = f"{event_key}#{report_num}#{event.id}#{int(time.time() * 1000)}"
 
         store.cenc_pending[pending_key] = {
@@ -83,6 +153,8 @@ class CENCFusionService:
             "future": future,
             "event_key": event_key,
             "report_num": report_num,
+            "measurement_type": measurement_type,
+            "similarity_profile": similarity_profile,
             "created_at": time.time(),
         }
 
@@ -129,26 +201,53 @@ class CENCFusionService:
         """处理 Wolfx 到达事件，并尝试唤醒等待中的 Fan CENC 事件。"""
         earthquake = self._get_earthquake_data(wolfx_event)
         if earthquake is None:
+            logger.warning(
+                "[灾害预警] CENC 融合策略收到了一条 Wolfx 消息，但里面没有可用的地震事件对象，因此这次无法参与融合。"
+            )
             return
 
         intensity = getattr(earthquake, "intensity", None)
         if intensity is None:
+            logger.warning(
+                f"[灾害预警] 这条 Wolfx CENC 消息已经进入融合流程，但烈度信息仍然缺失。"
+                f"当前震中是 {getattr(earthquake, 'place_name', '未知地点') or '未知地点'}，"
+                f"发震时间是 {getattr(earthquake, 'occurred_at', None)}，因此这次无法补充 Fan 的烈度。"
+            )
             return
 
         store = self.manager._fusion_state_store
         store.prune()
 
-        event_key = store.get_fusion_event_key(earthquake)
-        report_num = store.get_fusion_report_num(earthquake)
+        event_key = store.get_fusion_event_key(wolfx_event)
+        report_num = store.get_fusion_report_num(wolfx_event)
+        measurement_type = self._resolve_measurement_type(wolfx_event)
+        similarity_profile = store.build_cenc_similarity_profile(wolfx_event)
         if not event_key:
+            logger.warning(
+                f"[灾害预警] 这条 Wolfx CENC 消息虽然带有烈度，但没有生成出可用于融合的事件标识。"
+                f"震中是 {getattr(earthquake, 'place_name', '未知地点') or '未知地点'}，"
+                f"发震时间是 {getattr(earthquake, 'occurred_at', None)}，这次只能放弃写入融合缓存。"
+            )
             return
 
         event_cache = store.cenc_wolfx_cache.setdefault(event_key, {})
-        event_cache[report_num] = {"intensity": intensity, "created_at": time.time()}
+        event_cache[report_num] = {
+            "intensity": intensity,
+            "measurement_type": measurement_type,
+            "occurred_at": similarity_profile.get("occurred_at"),
+            "latitude": similarity_profile.get("latitude"),
+            "longitude": similarity_profile.get("longitude"),
+            "magnitude": similarity_profile.get("magnitude"),
+            "created_at": time.time(),
+        }
 
-        pending_key = store.find_best_pending_key(
-            store.cenc_pending, event_key, report_num
+        pending_key = store.find_best_cenc_pending_key(
+            store.cenc_pending, event_key, measurement_type
         )
+        if not pending_key:
+            pending_key = store.find_best_cenc_pending_key_by_profile(
+                store.cenc_pending, measurement_type, similarity_profile
+            )
         if not pending_key:
             return
 
@@ -163,7 +262,7 @@ class CENCFusionService:
             if fan_event is None or fan_earthquake is None:
                 return
 
-            fan_earthquake.intensity = intensity
+            type(self)._apply_intensity(fan_event, fan_earthquake, intensity)
             logger.info(
                 f"[灾害预警] 融合策略: 成功用 Wolfx 补充 Fan CENC 事件 {pending_key} 的烈度: {intensity}"
             )

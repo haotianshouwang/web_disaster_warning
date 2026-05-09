@@ -74,6 +74,7 @@ class WebServerRuntimeService:
             app,
             disaster_service=self.server.disaster_service,
             realtime_payload_builder=self.server._realtime_payload_builder,
+            password_getter=self.server.config_accessor.web_admin_password,
         )
         register_runtime_admin_routes(
             app,
@@ -86,7 +87,9 @@ class WebServerRuntimeService:
             app,
             disaster_service=self.server.disaster_service,
             plugin_root=os.path.dirname(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+                os.path.dirname(
+                    os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+                )
             ),
         )
         register_events_routes(app, disaster_service=self.server.disaster_service)

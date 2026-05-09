@@ -38,7 +38,7 @@ class EventIngressDispatchService:
         )
         strategy_key_map = {
             "cenc_intensity": "cenc_fusion",
-            "cwa_impact_area": "cwa_eew_fusion",
+            "cwa_scale": "cwa_eew_fusion",
         }
         strategy_key = strategy_key_map.get(entry.fusion_group)
         if not strategy_key:

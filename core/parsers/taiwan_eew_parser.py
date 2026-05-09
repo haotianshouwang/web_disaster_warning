@@ -63,6 +63,7 @@ class CwaEewParser(BaseParser):
             "source_type": source_entry.source_type.value
             if source_entry
             else "earthquake_warning",
+            "event_id": event_id,
             "create_time": self._parse_datetime(msg_data.get("createTime", "")),
             "updates": msg_data.get("updates", 1),
             "is_final": bool(msg_data.get("isFinal", False)),
@@ -224,6 +225,7 @@ class CwaEewWolfxParser(BaseParser):
                 "source_type": source_entry.source_type.value
                 if source_entry
                 else "earthquake_warning",
+                "event_id": event_id,
                 "updates": report_num,
                 "report_num": report_num,
                 "impact_area": impact_area,
