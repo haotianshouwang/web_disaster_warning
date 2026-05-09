@@ -1761,56 +1761,56 @@ graph TB
 在整体分层上，当前实现大致可概括为六层：
 
 - **入口壳层**：[`main.py`](main.py) 只保留 AstrBot 插件入口职责，把初始化、命令分发、管理端启动和终止回收控制在较薄的一层。
-- **应用编排层**：[`DisasterWarningService`](core/app/disaster_service.py:78) 作为核心服务门面，统一持有配置、上下文、共享状态与子系统引用。
-- **接入标准化层**：[`WebSocketManager`](core/network/websocket/websocket_manager.py)、[`SourceMessageRouter`](core/network/source_message_router.py:63)、各类 [`parser.parse_message()`](core/parsers/base_parser.py:1) 共同把上游异构报文规整为统一事件。
-- **推送决策层**：[`MessagePushManager`](core/message/message_manager.py:36)、[`PushOrchestrator`](core/message/push/push_orchestrator.py:15)、[`PushExecutionService`](core/message/push/push_execution_service.py:20) 负责多会话筛选、融合策略与消息发送。
-- **存储与状态层**：[`StatisticsManager`](core/storage/statistics_manager.py:32)、会话配置、缓存文件、日志链路和运行时状态共同承载“可恢复”和“可查询”能力。
-- **运维治理层**：[`WebAdminServer`](core/network/admin/host/web_server.py:37)、[`TelemetryManager`](core/services/telemetry/telemetry_service.py)、配置校验和健康探测能力形成运维闭环。
+- **应用编排层**：[`DisasterWarningService`](core/app/disaster_service.py) 作为核心服务门面，统一持有配置、上下文、共享状态与子系统引用。
+- **接入标准化层**：[`WebSocketManager`](core/network/websocket/websocket_manager.py)、[`SourceMessageRouter`](core/network/source_message_router.py)、各类 [`parser.parse_message()`](core/parsers/base_parser.py) 共同把上游异构报文规整为统一事件。
+- **推送决策层**：[`MessagePushManager`](core/message/message_manager.py)、[`PushOrchestrator`](core/message/push/push_orchestrator.py)、[`PushExecutionService`](core/message/push/push_execution_service.py) 负责多会话筛选、融合策略与消息发送。
+- **存储与状态层**：[`StatisticsManager`](core/storage/statistics_manager.py)、会话配置、缓存文件、日志链路和运行时状态共同承载“可恢复”和“可查询”能力。
+- **运维治理层**：[`WebAdminServer`](core/network/admin/host/web_server.py)、[`TelemetryManager`](core/services/telemetry/telemetry_service.py)、配置校验和健康探测能力形成运维闭环。
 
 在运行生命周期上，后端采用了“**先校验装配，再并行运行，最后有序回收**”的完整闭环：
 
-- **启动阶段**：[`PluginLifecycleService`](plugin/plugin_lifecycle_service.py:21) 先完成管理员同步、配置修正、遥测注入与异常处理器安装；随后 [`DisasterWarningService.initialize()`](core/app/disaster_service.py:228) 校验 catalog / presenter 注册、加载基础区域数据、注册路由并构建连接计划。
+- **启动阶段**：[`PluginLifecycleService`](plugin/plugin_lifecycle_service.py) 先完成管理员同步、配置修正、遥测注入与异常处理器安装；随后 [`DisasterWarningService.initialize()`](core/app/disaster_service.py) 校验 catalog / presenter 注册、加载基础区域数据、注册路由并构建连接计划。
 - **运行阶段**：服务主循环、WebSocket 长连接、HTTP 定时拉取、离线通知、管理端广播、健康探测、资源清理等任务分散在独立服务中并行运行，避免所有过程堆积到单一主类。
 - **停机阶段**：遵循“取消后台任务 → 停止核心服务 → 清理浏览器/会话资源 → 关闭遥测 → 关闭管理端”的顺序，降低悬挂任务和外部进程残留概率。
 
 在数据接入与标准化方面，当前架构最核心的改进，是把“**接入协议**”与“**事件主链**”做了清晰分离：
 
-- **连接计划外置**：[`ConnectionPlanBuilder.build()`](core/services/config/connection_plan_builder.py:40) 基于统一 [`SOURCE_CATALOG`](core/sources/source_catalog.py) 生成当前启用数据源的连接拓扑，而不是在主服务中硬编码连接列表。
-- **路由入口统一**：[`SourceMessageRouter`](core/network/source_message_router.py:63) 根据 provider family 把 FAN Studio、P2P、Wolfx、Global Quake 等消息路由到正确解析路径。
-- **旁路副作用拆分**：[`SourceIngressSideEffectService.process_message()`](core/network/source_ingress_side_effect_service.py:19) 在主事件处理前就能独立完成列表缓存刷新、摘要日志等旁路工作，避免污染业务主链。
+- **连接计划外置**：[`ConnectionPlanBuilder.build()`](core/services/config/connection_plan_builder.py) 基于统一 [`SOURCE_CATALOG`](core/sources/source_catalog.py) 生成当前启用数据源的连接拓扑，而不是在主服务中硬编码连接列表。
+- **路由入口统一**：[`SourceMessageRouter`](core/network/source_message_router.py) 根据 provider family 把 FAN Studio、P2P、Wolfx、Global Quake 等消息路由到正确解析路径。
+- **旁路副作用拆分**：[`SourceIngressSideEffectService.process_message()`](core/network/source_ingress_side_effect_service.py) 在主事件处理前就能独立完成列表缓存刷新、摘要日志等旁路工作，避免污染业务主链。
 - **标准事件输出**：所有解析器最终都输出统一的 [`EventEnvelope`](core/domain/event_models.py)，使后续推送、统计、管理端广播不必感知上游协议差异。
 
 在事件进入应用层之后，后端采用了“**轻门面 + 统一流水线**”的处理方式：
 
-- [`DisasterWarningService`](core/app/disaster_service.py:78) 不再直接堆叠大量过程式逻辑，而是把生命周期、重连、状态、通知、缓存、接入调度等职责拆到 [`core/app/runtime/`](core/app/runtime) 与专用子服务中。
-- 真正的事件后处理统一收敛到 [`EventPipeline.handle()`](core/app/pipeline/event_pipeline.py:28)，主链稳定保持为：**推送 → 统计 → 管理端广播**。
-- 对 FAN Studio EEW 等高频快报源，[`EventIngressDispatchService`](core/network/event_ingress_dispatch_service.py:16) 还能依据融合策略决定是否切换为后台异步分发，从而减少接入线程阻塞。
+- [`DisasterWarningService`](core/app/disaster_service.py) 不再直接堆叠大量过程式逻辑，而是把生命周期、重连、状态、通知、缓存、接入调度等职责拆到 [`core/app/runtime/`](core/app/runtime) 与专用子服务中。
+- 真正的事件后处理统一收敛到 [`EventPipeline.handle()`](core/app/pipeline/event_pipeline.py)，主链稳定保持为：**推送 → 统计 → 管理端广播**。
+- 对 FAN Studio EEW 等高频快报源，[`EventIngressDispatchService`](core/network/event_ingress_dispatch_service.py) 还能依据融合策略决定是否切换为后台异步分发，从而减少接入线程阻塞。
 
 在推送决策链上，当前实现已经从“简单过滤器堆叠”演进为“**多会话配置驱动的策略执行系统**”：
 
 - **会话级配置展开**：[`SessionConfigManager`](core/storage/session_config_manager.py) 提供目标会话枚举与差异配置合成，让每个会话都能拥有独立规则组合。
-- **编排与执行分离**：[`PushOrchestrator.push_event()`](core/message/push/push_orchestrator.py:65) 决定事件走普通推送还是融合推送；[`PushFlowHandler.execute_push()`](core/message/push/push_flow_handler.py:28) 负责主流程编排；[`PushExecutionService.execute()`](core/message/push/push_execution_service.py:86) 负责会话预筛、发送前复核、并发发送与失败降级。
+- **编排与执行分离**：[`PushOrchestrator.push_event()`](core/message/push/push_orchestrator.py) 决定事件走普通推送还是融合推送；[`PushFlowHandler.execute_push()`](core/message/push/push_flow_handler.py) 负责主流程编排；[`PushExecutionService.execute()`](core/message/push/push_execution_service.py) 负责会话预筛、发送前复核、并发发送与失败降级。
 - **规则状态可组合**：时间窗口、数据源开关、关键词、烈度/震级、本地监测、报数控制等规则不再散落在主流程中，而是通过组件化状态求值组合完成。
-- **融合策略内建**：[`PushOrchestrator`](core/message/push/push_orchestrator.py:15) 能针对 CENC 与 CWA EEW 场景切换到融合服务，在时效与完整性之间做显式权衡。
+- **融合策略内建**：[`PushOrchestrator`](core/message/push/push_orchestrator.py) 能针对 CENC 与 CWA EEW 场景切换到融合服务，在时效与完整性之间做显式权衡。
 
 在消息构建与渲染层，设计重点已经非常明确：**文本优先送达，富媒体延后补齐，渲染结果尽量复用**。
 
-- **高层装配统一**：[`MessagePushManager`](core/message/message_manager.py:36) 统一装配浏览器、构建器、推送执行链、融合状态与资源清理能力。
+- **高层装配统一**：[`MessagePushManager`](core/message/message_manager.py) 统一装配浏览器、构建器、推送执行链、融合状态与资源清理能力。
 - **构建链拆分**：文本、地图附件、Global Quake 卡片、远程媒体抓取分别由独立 builder / service 负责，降低展示逻辑耦合。
-- **构建缓存复用**：[`PushExecutionService`](core/message/push/push_execution_service.py:86) 会按事件与渲染参数缓存消息构建任务，避免多会话并发时重复渲染相同内容。
+- **构建缓存复用**：[`PushExecutionService`](core/message/push/push_execution_service.py) 会按事件与渲染参数缓存消息构建任务，避免多会话并发时重复渲染相同内容。
 - **富媒体降级与拆图**：主消息发送失败时可自动尝试纯文本降级；地图图片可依据报数与会话配置异步拆分补发，优先保证快报文本时效。
 
 在存储与可观测性上，后端不是单一数据库模型，而是“**数据库 + JSON 快照 + 原始日志 + 运行时状态**”多轨协作：
 
-- **统计总入口**：[`StatisticsManager`](core/storage/statistics_manager.py:32) 负责装配统计聚合、规则、查询、会话统计、加载恢复和数据库能力。
-- **明细与快照分工**：SQLite 负责事件明细与长期查询；[`statistics.json`](README.md:1149) 等 JSON 文件负责统计快照、地震列表缓存和 EEW 状态缓存，方便跨重启恢复。
+- **统计总入口**：[`StatisticsManager`](core/storage/statistics_manager.py) 负责装配统计聚合、规则、查询、会话统计、加载恢复和数据库能力。
+- **明细与快照分工**：SQLite 负责事件明细与长期查询；[`statistics.json`](README.md) 等 JSON 文件负责统计快照、地震列表缓存和 EEW 状态缓存，方便跨重启恢复。
 - **原始消息日志链路**：[`MessageLogger`](core/message/message_logger.py) 及其 [`logging/`](core/message/logging) 子模块把原始报文记录、可读化格式化、过滤与轮转做成完整链路。
 - **运行态可见性**：连接状态、延迟缓存、重大事件摘要、近期事件列表等内存态会被管理端与指令查询复用，形成统一观测面。
 
 在运维控制面上，当前后端已经不只是“附带一个 Web 页面”，而是形成了独立的管理端后端子系统：
 
-- **宿主与路由解耦**：[`WebAdminServer`](core/network/admin/host/web_server.py:37) 负责 FastAPI / Uvicorn 宿主装配，而具体实时数据拼装、鉴权、广播与路由注册则下沉到运行时服务与 payload builder。
-- **双通道控制台模型**：REST 接口负责状态、连接、事件、统计、配置、模拟、重连等操作；[`/ws`](core/network/admin/host/web_server.py:140) 则承担周期快照与事件驱动即时推送。
+- **宿主与路由解耦**：[`WebAdminServer`](core/network/admin/host/web_server.py) 负责 FastAPI / Uvicorn 宿主装配，而具体实时数据拼装、鉴权、广播与路由注册则下沉到运行时服务与 payload builder。
+- **双通道控制台模型**：REST 接口负责状态、连接、事件、统计、配置、模拟、重连等操作；[`/ws`](core/network/admin/host/web_server.py) 则承担周期快照与事件驱动即时推送。
 - **健康探测内建**：[`SourceHealthMonitor`](core/network/monitoring/source_health_monitor.py) 在后台维护延迟缓存，管理端展示的不只是“是否在线”，而是更接近真实运行质量的连接健康度。
 - **服务行为直达**：无论是命令入口还是 Web 运维入口，最终都回到同一批服务对象与状态源上，避免命令面与管理端出现两套不一致逻辑。
 
