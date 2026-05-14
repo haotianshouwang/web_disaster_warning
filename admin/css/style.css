@@ -438,6 +438,7 @@ body.dark-theme .top-bar::before {
 }
 
 /* 卡片入场动画：统一淡入、上移归位与轻微缩放。 */
+.card-animated,
 .card,
 .event-card,
 .event-group-expanded,
@@ -3034,6 +3035,7 @@ html.theme-dark .skeleton {
     .boot-loader__logo,
     .boot-loader__progress-bar,
     .skeleton,
+    .card-animated,
     .card,
     .event-card,
     .event-group-expanded,
