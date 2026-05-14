@@ -15,7 +15,17 @@ from ...domain.event_models import (
 )
 from ...domain.event_payload import SourcePayload
 
-_MAJOR_WEATHER_KEYWORDS = ("红", "红色")
+MAJOR_EARTHQUAKE_MAGNITUDE_THRESHOLD = 6.0
+_MAJOR_WEATHER_KEYWORDS = ("红",)
+
+
+def is_major_weather_text(*candidates: Any) -> bool:
+    """判断候选文本是否表示重大气象红色预警。"""
+    return any(
+        keyword in text
+        for keyword in _MAJOR_WEATHER_KEYWORDS
+        for text in (str(candidate or "") for candidate in candidates)
+    )
 
 
 def is_major_record(record: dict[str, Any]) -> bool:
@@ -27,17 +37,16 @@ def is_major_record(record: dict[str, Any]) -> bool:
     # 持久化记录按事件类型分别采用震级、海啸类型或气象级别做重大性判断。
     if record_type in {"earthquake", "earthquake_warning"}:
         magnitude = record.get("magnitude")
-        return magnitude is not None and magnitude >= 6.0
+        return (
+            magnitude is not None
+            and magnitude >= MAJOR_EARTHQUAKE_MAGNITUDE_THRESHOLD
+        )
     if record_type == "tsunami":
         return True
     if record_type == "weather_alarm":
         level = str(record.get("level") or "")
         description = str(record.get("description") or "")
-        return any(
-            keyword in candidate
-            for keyword in _MAJOR_WEATHER_KEYWORDS
-            for candidate in (level, description)
-        )
+        return is_major_weather_text(level, description)
     return False
 
 
@@ -51,7 +60,10 @@ def is_major_event(event: EventEnvelope) -> bool:
 
     # 地震、海啸和气象事件采用不同的重大性判断标准。
     if isinstance(domain_event, EarthquakeEvent):
-        return domain_event.magnitude is not None and domain_event.magnitude >= 6.0
+        return (
+            domain_event.magnitude is not None
+            and domain_event.magnitude >= MAJOR_EARTHQUAKE_MAGNITUDE_THRESHOLD
+        )
     if isinstance(domain_event, TsunamiEvent):
         return True
     if isinstance(domain_event, WeatherEvent):
@@ -75,9 +87,5 @@ def is_major_event(event: EventEnvelope) -> bool:
             or payload.get("title", "")
             or payload.get("headline", "")
         )
-        return any(
-            keyword in candidate
-            for keyword in _MAJOR_WEATHER_KEYWORDS
-            for candidate in (level, title)
-        )
+        return is_major_weather_text(level, title)
     return False
