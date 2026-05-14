@@ -23,8 +23,7 @@ MAJOR_WEATHER_TEXT_PHRASES = ("红色预警",)
 def is_major_weather_level(*candidates: Any) -> bool:
     """判断结构化气象等级字段是否表示红色预警。"""
     return any(
-        MAJOR_WEATHER_LEVEL_KEYWORD in str(candidate or "")
-        for candidate in candidates
+        MAJOR_WEATHER_LEVEL_KEYWORD in str(candidate or "") for candidate in candidates
     )
 
 
@@ -47,8 +46,7 @@ def is_major_record(record: dict[str, Any]) -> bool:
     if record_type in {"earthquake", "earthquake_warning"}:
         magnitude = record.get("magnitude")
         return (
-            magnitude is not None
-            and magnitude >= MAJOR_EARTHQUAKE_MAGNITUDE_THRESHOLD
+            magnitude is not None and magnitude >= MAJOR_EARTHQUAKE_MAGNITUDE_THRESHOLD
         )
     if record_type == "tsunami":
         return True
