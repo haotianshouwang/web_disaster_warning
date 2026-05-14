@@ -129,7 +129,15 @@ class ConfigValidator:
                 config["data_sources"]
             )
 
-        # 16. 顶层开关校验
+        # 16. 通知中心配置校验
+        if "notification_settings" in config:
+            config["notification_settings"] = (
+                ConfigValidator._validate_notification_settings(
+                    config["notification_settings"]
+                )
+            )
+
+        # 17. 顶层开关校验
         if "enabled" in config and not isinstance(config["enabled"], bool):
             config["enabled"] = True
 
@@ -755,6 +763,27 @@ class ConfigValidator:
         # 确保 enabled 是布尔值
         if "enabled" in cfg and not isinstance(cfg["enabled"], bool):
             cfg["enabled"] = True
+
+        return cfg
+
+    @staticmethod
+    def _validate_notification_settings(cfg: dict[str, Any]) -> dict[str, Any]:
+        """校验通知中心配置。"""
+        if not isinstance(cfg, dict):
+            return cfg
+
+        ConfigValidator._ensure_bool(cfg, "enabled", True)
+
+        poll_interval = cfg.get("poll_interval_seconds")
+        if isinstance(poll_interval, int):
+            if poll_interval < 30:
+                logger.warning(
+                    f"[灾害预警] 配置警告: 通知轮询间隔 {poll_interval} 秒过小，已修正为 30。"
+                )
+                cfg["poll_interval_seconds"] = 30
+        elif poll_interval is not None:
+            logger.warning("[灾害预警] 配置警告: 通知轮询间隔类型错误，已重置为 300。")
+            cfg["poll_interval_seconds"] = 300
 
         return cfg
 
