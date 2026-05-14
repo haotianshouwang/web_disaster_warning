@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD028 -->
 <!-- markdownlint-disable MD033 -->
 <!-- markdownlint-disable MD041 -->
 ![astrbot_plugin_disaster_warning](https://socialify.git.ci/DBJD-CR/astrbot_plugin_disaster_warning/image?custom_description=%F0%9F%9A%A8+%E4%B8%80%E4%B8%AA%E5%9F%BA%E4%BA%8E+AstrBot+%E7%9A%84%E5%A4%9A%E6%95%B0%E6%8D%AE%E6%BA%90%E7%81%BE%E5%AE%B3%E9%A2%84%E8%AD%A6%E6%8F%92%E4%BB%B6&description=1&font=Inter&forks=1&issues=1&language=1&name=1&owner=1&pattern=Charlie+Brown&pulls=1&stargazers=1&theme=Auto)
@@ -814,7 +815,32 @@
 
 ---
 
-### 🛠️ 11. 调试配置 (`debug_config`)
+### 🔔 11. 官方通知配置 (`notification_settings`)
+
+用于控制插件官方通知系统。该模块会从远端通知平台拉取插件更新、修复说明、注意事项等公告，并同步到内置 Web 管理端的通知中心。
+
+- **启用通知中心 (`enabled`)**:
+  - 类型：`Boolean`
+  - 默认值：`true`
+  - 说明：启用后，插件将按设定周期从远端通知平台拉取通知，并在 Web 管理端展示。
+  - 关闭后：停止远端通知轮询，但仍保留本地已读缓存，不会清空既有通知阅读状态。
+- **通知轮询间隔 (`poll_interval_seconds`)**:
+  - 类型：`Integer`
+  - 默认值：`300`
+  - 单位：秒
+  - 范围：`30 - 86400`
+  - 说明：插件向远端通知平台检查更新的时间间隔。若配置值低于 30 秒，运行时会按最低 30 秒处理，避免过于频繁地请求远端服务。
+
+```json
+"notification_settings": {
+  "enabled": true,                 // 是否启用官方通知中心远端轮询
+  "poll_interval_seconds": 300     // 通知轮询间隔（秒，最低按 30 秒处理）
+}
+```
+
+---
+
+### 🛠️ 12. 调试配置 (`debug_config`)
 
 - **原始消息日志 (`enable_raw_message_logging`)**: 记录并格式化上游原始 JSON 报文到 `raw_messages.log`。
 - **原始日志路径 (`raw_message_log_path`)**: 相对于插件数据目录。
@@ -843,7 +869,7 @@
 
 ---
 
-### 📡 12. 匿名遥测 (`telemetry_config`)
+### 📡 13. 匿名遥测 (`telemetry_config`)
 
 - **启用匿名遥测 (`enabled`)**:
   - 默认开启。插件会发送匿名的使用统计（如活跃状态、报错信息）以帮助开发者改进插件。
@@ -869,6 +895,7 @@
 #### ⚠️ 典型“建议重载后生效”配置
 
 - `web_admin`（启用状态、host、port）
+- `notification_settings`（通知轮询任务启停与轮询周期）
 - `websocket_config`（连接生命周期相关参数）
 - `message_format` 中与浏览器池初始化强相关的参数（如 `browser_pool_size`、`playwright_mode`）
 - `debug_config` 中依赖初始化读取的日志器参数
@@ -908,6 +935,9 @@
 > 带有 **(仅管理员)** 标记的命令需要用户具有 AstrBot 全局管理员权限或在插件配置中被列为管理员才能使用。
 
 ### 命令示例
+
+<details>
+<summary>点击查看命令示例</summary>
 
 ```bash
 # 查询地震列表
@@ -1003,11 +1033,14 @@
 >
 > `/灾害预警统计`命令中，地震震级分布与最大地震的统计可能会不一致，这是由于对数据源的筛选逻辑不一样导致的，前者比较宽松，后者比较严格。
 
+</details>
+
 ---
 
 ## 📂 插件目录与结构
 
-目录结构示例：
+<details>
+<summary>点击查看目录结构示例</summary>
 
 ```bash
 AstrBot/
@@ -1265,10 +1298,11 @@ AstrBot/
              └─ version.py                     # 获取插件版本号的工具
 ```
 
-docs/ 目录中有关 Fan Studio 和 Wolfx 的 API 文档为个人收集整理，非完整内容，并且可能与官方文档表述存在出入或过时的问题，仅供参考，必要时请以官方文档为准。
-
-- [FAN Studio API Docs](https://api.fanstudio.tech/)
-- [Wolfx 防灾(防災) 实用类 免费API接口](https://wolfx.jp/)
+> [!NOTE]
+> docs/ 目录中有关 Fan Studio 和 Wolfx 的 API 文档为个人收集整理，非完整内容，并且可能与官方文档表述存在出入或过时的问题，仅供参考，必要时请以官方文档为准。
+>
+> - [FAN Studio API Docs](https://api.fanstudio.tech/)
+> - [Wolfx 防灾(防災) 实用类 免费API接口](https://wolfx.jp/)
 
 ### 💾 数据持久化与存储
 
@@ -1302,6 +1336,8 @@ AstrBot/
 - **原始日志 (`raw_messages.log`)**: 仅在 WebUI 配置中启用 `enable_raw_message_logging` 时生成。它以极高的可读性记录了上游数据源的原始 JSON 结构，是开发者和高级用户排查问题的利器。
 - **日志轮转机制**: 插件内置了日志自动管理逻辑。默认单个日志上限为 50MB，和可配置的历史备份文件上限，防止占满磁盘空间。
 - **图片缓存 (`temp/`)**: 用于存放 Playwright 渲染生成的预警卡片图片。该目录有自动清理机制，无需手动维护。
+
+</details>
 
 ---
 
@@ -1916,7 +1952,10 @@ graph TB
 
 ## 📒 增强的可读性日志格式
 
-插件提供**自动格式化的高可读性日志**，将原始的 JSON 数据转换为易读的中文格式。以下是部分数据源的示例：
+插件提供**自动格式化的高可读性日志**，将原始的 JSON 数据转换为易读的中文格式。
+
+<details>
+<summary>点击查看日志格式示例</summary>
 
 **P2P地震情報详细震度信息**：
 
@@ -2038,6 +2077,8 @@ graph TB
 🔧 插件版本: v1.4.0
 ===================================
 ```
+
+</details>
 
 **智能格式化特性**：
 
