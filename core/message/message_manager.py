@@ -6,8 +6,8 @@
 对上层仅暴露少量统一接口。
 """
 
-import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
@@ -43,13 +43,10 @@ class MessagePushManager:
         self._telemetry = telemetry
         # 会话发送器是最底层的消息下发执行入口。
         self.session_sender = SessionSender(context)
-        self.plugin_root = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        )
+        self.plugin_root = str(Path(__file__).resolve().parents[2])
         self.storage_dir = StarTools.get_data_dir("astrbot_plugin_disaster_warning")
         self.temp_dir = self.storage_dir / "temp"
-        if not os.path.exists(self.temp_dir):
-            os.makedirs(self.temp_dir, exist_ok=True)
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
 
         self.data_dir = self.plugin_root
         # 记录最近一次成功发送的会话，便于后续状态查看或调试。

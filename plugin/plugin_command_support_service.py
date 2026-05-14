@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-import os
+from pathlib import Path
 from typing import Any
 
 import astrbot.api.message_components as Comp
@@ -45,12 +45,9 @@ class PluginCommandSupportService:
         if self.plugin._config_schema is not None:
             return self.plugin._config_schema
 
-        schema_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            "_conf_schema.json",
-        )
-        if os.path.exists(schema_path):
-            with open(schema_path, encoding="utf-8") as f:
+        schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
+        if schema_path.exists():
+            with schema_path.open(encoding="utf-8") as f:
                 self.plugin._config_schema = json.load(f)
         else:
             self.plugin._config_schema = {}

@@ -4,8 +4,8 @@
 """
 
 import asyncio
-import os
 import secrets
+from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
@@ -120,15 +120,8 @@ class WebAdminServer:
 
         self._register_routes()
 
-        admin_dir = os.path.join(
-            os.path.dirname(
-                os.path.dirname(
-                    os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-                )
-            ),
-            "admin",
-        )
-        if os.path.exists(admin_dir):
+        admin_dir = Path(__file__).resolve().parents[4] / "admin"
+        if admin_dir.exists():
             self.app.mount(
                 "/", StaticFiles(directory=admin_dir, html=True), name="admin"
             )
