@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+
+import aiohttp
 
 from ....utils.version import get_plugin_version
 
@@ -45,34 +44,41 @@ class NotificationRemoteClient:
         if not url:
             return []
 
-        def _request() -> list[dict[str, Any]]:
-            request = Request(
-                url,
-                method="GET",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                    "Cache-Control": "no-cache",
-                    "Pragma": "no-cache",
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/133.0.0.0 Safari/537.36"
-                    ),
-                },
-            )
-            with urlopen(request, timeout=10) as response:
-                body = response.read().decode("utf-8")
-            payload = json.loads(body)
-            if not isinstance(payload, list):
-                raise ValueError("通知接口返回体不是数组")
-            return payload
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/133.0.0.0 Safari/537.36"
+            ),
+        }
+        timeout = aiohttp.ClientTimeout(total=10)
+        retry_delays = (0.5, 1.0)
+        last_error: Exception | None = None
 
-        try:
-            return await asyncio.to_thread(_request)
-        except HTTPError as e:
-            raise RuntimeError(f"通知接口请求失败，HTTP {e.code}") from e
-        except URLError as e:
-            raise RuntimeError(f"通知接口连接失败: {e.reason}") from e
-        except TimeoutError as e:
-            raise RuntimeError("通知接口请求超时") from e
+        for attempt in range(len(retry_delays) + 1):
+            try:
+                async with aiohttp.ClientSession(
+                    timeout=timeout, headers=headers
+                ) as session:
+                    async with session.get(url) as response:
+                        if response.status >= 400:
+                            raise RuntimeError(
+                                f"通知接口请求失败，HTTP {response.status}"
+                            )
+                        payload = await response.json(content_type=None)
+                if not isinstance(payload, list):
+                    raise ValueError("通知接口返回体不是数组")
+                return payload
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError) as e:
+                last_error = e
+                if attempt >= len(retry_delays):
+                    break
+                await asyncio.sleep(retry_delays[attempt])
+
+        if isinstance(last_error, asyncio.TimeoutError):
+            raise RuntimeError("通知接口请求超时") from last_error
+        raise RuntimeError(f"通知接口连接失败: {last_error}") from last_error

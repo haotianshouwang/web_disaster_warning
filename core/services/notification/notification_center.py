@@ -136,18 +136,22 @@ class NotificationCenter:
                 new_signature = self._items_signature(remote_items)
                 changed = old_signature != new_signature
 
-                current_read_map = self._cache.setdefault("read_map", {})
+                current_read_map = self._cache.get("read_map", {})
                 active_ids = {str(item.get("id")) for item in remote_items}
-                self._cache["read_map"] = {
-                    key: value
-                    for key, value in current_read_map.items()
-                    if key in active_ids
+                next_cache = {
+                    **self._cache,
+                    "read_map": {
+                        key: value
+                        for key, value in current_read_map.items()
+                        if key in active_ids
+                    },
+                    "items": remote_items,
+                    "last_sync_at": datetime.now(timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
                 }
-                self._cache["items"] = remote_items
-                self._cache["last_sync_at"] = (
-                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                )
-                await self.repository.save(self._cache)
+                await self.repository.save(next_cache)
+                self._cache = next_cache
                 return changed
         except Exception as e:
             logger.warning(f"[灾害预警] 同步远端通知失败: {e} (可忽略)")
