@@ -34,13 +34,13 @@ class StatsRuleService:
         # 不同灾种的重大性标准不同，这里统一收口成统计侧可复用的判定入口。
         if isinstance(domain_event, EarthquakeEvent):
             magnitude = getattr(domain_event, "magnitude", None)
-            return magnitude is not None and magnitude >= 5.0
+            return magnitude is not None and magnitude >= 6.0
         if isinstance(domain_event, TsunamiEvent):
             level = str(getattr(domain_event, "level", "") or "")
             return level not in {"", "信息", "None", "Unknown"}
         if isinstance(domain_event, WeatherEvent):
             title_text = f"{getattr(domain_event, 'title', '')}{getattr(domain_event, 'headline', '')}"
-            return any(color in title_text for color in ["红色", "橙色"])
+            return "红色" in title_text or "红" in title_text
         return False
 
     def record_earthquake_stats(self, event: EventEnvelope) -> None:

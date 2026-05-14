@@ -495,16 +495,24 @@ class DatabaseManager:
                     FROM events
                     WHERE is_major = 1
                       AND (
-                          type != 'weather_alarm'
+                          type NOT IN ('earthquake', 'earthquake_warning', 'weather_alarm')
                           OR (
-                              -- 气象预警仅保留红/橙级别：优先 level，缺失时回退 description
-                              (
-                                  COALESCE(TRIM(level), '') != ''
-                                  AND (level LIKE '%红%' OR level LIKE '%橙%')
-                              )
-                              OR (
-                                  COALESCE(TRIM(level), '') = ''
-                                  AND (description LIKE '%红%' OR description LIKE '%橙%')
+                              type IN ('earthquake', 'earthquake_warning')
+                              AND magnitude IS NOT NULL
+                              AND magnitude >= 6.0
+                          )
+                          OR (
+                              type = 'weather_alarm'
+                              AND (
+                                  -- 气象预警仅保留红色级别：优先 level，缺失时回退 description
+                                  (
+                                      COALESCE(TRIM(level), '') != ''
+                                      AND level LIKE '%红%'
+                                  )
+                                  OR (
+                                      COALESCE(TRIM(level), '') = ''
+                                      AND description LIKE '%红%'
+                                  )
                               )
                           )
                       )
