@@ -58,7 +58,9 @@ class GlobalQuakeParser(BaseParser):
                 )
                 return None
 
-            logger.debug(f"[灾害预警] {self.source_id} 收到未知类型的消息，类型值为 {ws_msg.type}")
+            logger.debug(
+                f"[灾害预警] {self.source_id} 收到未知类型的消息，类型值为 {ws_msg.type}"
+            )
             return None
         except Exception as exc:
             logger.error(f"[灾害预警] {self.source_id} Protobuf 解析失败: {exc}")

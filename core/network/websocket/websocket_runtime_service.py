@@ -37,7 +37,9 @@ class WebSocketRuntimeService:
                     try:
                         await websocket.ping()
                     except Exception as e:
-                        logger.warning(f"[灾害预警] WebSocket {name} 的 Ping 保活失败，错误为 {e}")
+                        logger.warning(
+                            f"[灾害预警] WebSocket {name} 的 Ping 保活失败，错误为 {e}"
+                        )
                         await websocket.close(code=1001, message=b"Heartbeat timeout")
                         break
         except asyncio.CancelledError:

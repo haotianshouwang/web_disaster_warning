@@ -256,7 +256,9 @@ class WebSocketManager:
             try:
                 await self.connections[name].send_str(message)
             except Exception as e:
-                logger.error(f"[灾害预警] WebSocket 管理器向 {name} 发送消息失败，错误为 {e}")
+                logger.error(
+                    f"[灾害预警] WebSocket 管理器向 {name} 发送消息失败，错误为 {e}"
+                )
         else:
             logger.warning(f"[灾害预警] WebSocket 管理器尝试向未连接的 {name} 发送消息")
 

@@ -155,7 +155,9 @@ class WebSocketDispatchService:
 
         # 关闭码策略显式区分：正常关闭、不应重连的协议错误、以及需要重连的异常关闭。
         if close_code in self._NORMAL_CLOSE_CODES:
-            logger.info(f"[灾害预警] WebSocket {name} 的连接已正常关闭，关闭码为 {close_code}")
+            logger.info(
+                f"[灾害预警] WebSocket {name} 的连接已正常关闭，关闭码为 {close_code}"
+            )
             return
 
         if close_code in self._NO_RECONNECT_CODES:

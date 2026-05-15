@@ -278,7 +278,9 @@ class SourceMessageRouter:
                     connection_info.get("uri") if connection_info else "未知地址"
                 )
                 connection_type = (
-                    connection_info.get("connection_type") if connection_info else "未知类型"
+                    connection_info.get("connection_type")
+                    if connection_info
+                    else "未知类型"
                 )
                 logger.error(
                     f"[灾害预警] FAN Studio 处理器解析来自 {connection_name or '未知连接'} 的消息失败，"
