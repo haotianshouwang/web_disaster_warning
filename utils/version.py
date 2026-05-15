@@ -6,6 +6,7 @@
 import os
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 
@@ -166,6 +167,7 @@ def _get_astrbot_version_from_pyproject(default: str = "unknown") -> AstrBotVers
         return _build_unknown_version_info(default, "pyproject_parse_failed")
 
 
+@lru_cache(maxsize=8)
 def get_astrbot_version_info(default: str = "unknown") -> AstrBotVersionInfo:
     """获取带来源与错误码的 AstrBot 版本探测结果。"""
     for resolver in (
