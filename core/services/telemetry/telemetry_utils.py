@@ -39,8 +39,9 @@ async def track_error_safely(
     """安全上报错误事件。"""
     if not telemetry or not getattr(telemetry, "enabled", False):
         return False
+    normalized_module = str(module).lower() if module is not None else None
     try:
-        return bool(await telemetry.track_error(exception, module=module))
+        return bool(await telemetry.track_error(exception, module=normalized_module))
     except Exception as exc:
         logger.debug(f"[灾害预警] {log_context}上报失败（已忽略）: {exc}")
         return False

@@ -16,26 +16,14 @@ from astrbot.api.event import MessageChain
 from ...core.app.services import format_earthquake_list_text, quoted_plain_result
 from ...core.services.query.weather_query_service import query_weather_alarm_data
 from ...core.services.simulation.simulation_service import build_earthquake_simulation
-from ...core.services.telemetry.telemetry_utils import track_feature_safely
+from .telemetry_mixin import CommandTelemetryMixin
 
 
-class PluginQueryCommandService:
+class PluginQueryCommandService(CommandTelemetryMixin):
     """插件查询与模拟命令服务。"""
 
     def __init__(self, plugin):
         self.plugin = plugin
-
-    async def _track_command_feature(
-        self, feature_name: str, extra: dict | None = None
-    ):
-        """上报匿名命令行为统计，不包含会话、关键词或原始参数。"""
-        telemetry = getattr(self.plugin, "telemetry", None)
-        await track_feature_safely(
-            telemetry,
-            feature_name,
-            extra,
-            log_context="查询命令行为遥测",
-        )
 
     async def handle_query_weather_alarm(
         self,
