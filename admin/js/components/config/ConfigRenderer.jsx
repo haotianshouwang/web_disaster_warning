@@ -1011,7 +1011,7 @@ function ConfigRenderer() {
                                 fieldKey={key}
                                 schema={subSchema}
                                 value={config[key]}
-                                onChange={(newValue) => { isDirtyRef.current = true; setConfig({ ...config, [key]: newValue }); }}
+                                onChange={(newValue) => { isDirtyRef.current = true; setConfig(prev => ({ ...prev, [key]: newValue })); }}
                                 path=""
                                 expandedKeys={expandedKeys}
                                 onToggleExpand={handleToggleExpand}
@@ -1066,7 +1066,7 @@ function ConfigRenderer() {
                                 };
                                 
                                 const defaults = generateDefaults(visibleSchema);
-                                setConfig(defaults);
+                                setConfig(prev => ({ ...prev, ...defaults }));
                                 localStorage.removeItem(getDraftKey());
                             }
                         }}
