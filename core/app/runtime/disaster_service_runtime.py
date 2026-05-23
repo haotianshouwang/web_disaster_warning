@@ -52,7 +52,7 @@ class DisasterServiceRuntimeService:
             # 具体断线重连、备用地址切换等细节由连接管理器内部负责。
             if conn_config["handler"] in ["fan_studio", "p2p", "wolfx", "global_quake"]:
                 # 这份连接附加信息会一路传入连接管理器，作为连接状态展示、重连通知、
-                # 管理端查询等场景 the 上下文信息。
+                # 管理端查询等场景的上下文信息。
                 connection_info = {
                     "connection_name": conn_name,
                     "handler_type": conn_config["handler"],
