@@ -101,9 +101,10 @@ function ConfigNumberField({ fieldKey, schema, value, onChange, depth }) {
                     value={localValue}
                     onChange={(e) => {
                         const nextValue = parseInputValue(e.target.value);
-                        // 当用户在清空输入或输入负号时，仅更新本地视觉输入，暂不向草稿状态提交
+                        // 当用户在清空输入或输入负号时，在保持本地原始输入的同时，也需要向草稿状态同步更新对应的值，避免保存时残留无效旧数据
                         if (nextValue === '' || nextValue === '-') {
                             setLocalValue(nextValue);
+                            onChange(nextValue);
                             return;
                         }
                         commitValue(nextValue);
