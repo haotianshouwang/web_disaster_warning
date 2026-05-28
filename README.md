@@ -1,6 +1,9 @@
 <!-- markdownlint-disable MD028 -->
 <!-- markdownlint-disable MD033 -->
 <!-- markdownlint-disable MD041 -->
+
+> **🔌 独立运行模式**：本项目现支持脱离 AstrBot 框架独立运行，通过 CLI 命令行或 Web 管理端直接使用灾害预警功能。
+
 ![astrbot_plugin_disaster_warning](https://socialify.git.ci/DBJD-CR/astrbot_plugin_disaster_warning/image?custom_description=%F0%9F%9A%A8+%E4%B8%80%E4%B8%AA%E5%9F%BA%E4%BA%8E+AstrBot+%E7%9A%84%E5%A4%9A%E6%95%B0%E6%8D%AE%E6%BA%90%E7%81%BE%E5%AE%B3%E9%A2%84%E8%AD%A6%E6%8F%92%E4%BB%B6&description=1&font=Inter&forks=1&issues=1&language=1&name=1&owner=1&pattern=Charlie+Brown&pulls=1&stargazers=1&theme=Auto)
 
 <p align="center">
@@ -30,7 +33,7 @@
 
 ---
 
-  一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的，功能强大的多数据源灾害预警插件，它能让你的 Bot 提供实时的地震、海啸、气象预警信息推送服务。
+一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的多数据源灾害预警插件。支持 AstrBot 插件模式和完全独立运行两种方式，提供实时地震、海啸、气象预警信息推送服务。
 
 ## 📑 快速导航
 
@@ -141,7 +144,74 @@
 
 ## 🚀 安装与使用
 
-1. **下载插件**: 通过 AstrBot 的插件市场下载。或从本 GitHub 仓库的 Release 下载 `astrbot_plugin_disaster_warning` 的 `.zip` 文件，在 AstrBot WebUI 中的插件页面中选择 `从文件安装` 。
+### 方式一：独立运行模式（推荐用于开发/测试/独立部署）
+
+**无需 AstrBot！** 一行命令启动，自动开启 Web 管理端 + CLI 交互控制台。
+
+1. **克隆项目并安装**：
+
+   ```bash
+   git clone https://github.com/DBJD-CR/astrbot_plugin_disaster_warning.git
+   cd astrbot_plugin_disaster_warning
+   pip install -e .
+   ```
+
+2. **安装渲染依赖（可选，用于地图卡片）**：
+
+   ```bash
+   playwright install --with-deps chromium
+   ```
+
+3. **运行**：
+
+   ```bash
+   # 启动（自动开启 Web 管理端 + 交互 CLI 控制台）
+   python main.py
+
+   # 或使用 console_scripts 入口
+   disaster-warning
+
+   # 仅 CLI（不启动 Web 管理端）
+   python main.py --no-web
+
+   # 仅后台服务（不进入交互 CLI）
+   python main.py --no-interactive
+
+   # 查看所有选项
+   python main.py --help
+   ```
+
+4. **首次运行**：程序会自动在项目目录下生成 `config.json` 配置文件，你可以直接编辑它来配置数据源、过滤器等参数。
+
+   ```bash
+   # 使用自定义配置文件
+   python main.py --config my_config.json --data-dir ./my_data
+   ```
+
+5. **CLI 命令（与 AstrBot 模式统一）**：
+
+   ```
+   /灾害预警状态         查看服务运行状态
+   /灾害预警统计         查看统计报告
+   /灾害预警重连         重连所有数据源
+   /灾害预警统计清除     清除统计
+   /灾害预警推送开关     开关会话推送
+   /灾害预警配置 查看    查看配置
+   /灾害预警日志         日志统计
+   /灾害预警日志开关     开关原始日志
+   /灾害预警日志清除     清除日志
+   /地震列表查询 [cenc|jma] [数量]  查询最新地震列表
+   /地震预警查询         查询 EEW 状态
+   /气象预警查询 <地名>  气象预警查询
+   /灾害预警模拟 <纬度> <经度> <震级> [深度] [数据源]  模拟地震
+   quit                  退出
+   ```
+
+   也支持简写（如直接输入 `状态`、`重连`、`地震列表` 等）。
+
+### 方式二：作为 AstrBot 插件使用
+
+1. **下载插件**: 通过 AstrBot 的插件市场下载。或从本 GitHub 仓库的 Release 下载 `astrbot_plugin_disaster_warning` 的 `.zip` 文件，在 AstrBot WebUI 中的插件页面中选择 `从文件安装`。
 2. **安装依赖**: 本插件的核心依赖大多已包含在 AstrBot 的默认依赖中，且在插件下载安装时会自动安装插件所需的依赖，通常无需额外安装。如果你的环境中确实缺少相关依赖，请安装：
 
    ```bash
@@ -905,7 +975,7 @@
 
 ## 📋 使用命令
 
-插件提供以下命令：
+以下命令在 AstrBot 模式和独立模式 CLI 中均可使用：
 
 | 命令 | 别名 | 描述 |
 | :--- | :--- | :--- |

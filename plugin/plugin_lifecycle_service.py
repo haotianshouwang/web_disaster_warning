@@ -182,6 +182,15 @@ class PluginLifecycleService:
             # 最后停止管理端 Web 服务器，避免外部仍尝试进行网络交互
             await self.plugin.web_server.stop()
 
+    @staticmethod
+    def _can_create_task() -> bool:
+        """检查事件循环是否存活，可用于安全创建异步任务。"""
+        try:
+            loop = asyncio.get_running_loop()
+            return loop.is_running()
+        except RuntimeError:
+            return False
+
     def handle_asyncio_exception(self, loop, context) -> None:
         """事件循环未处理异步异常拦截入口，判断来源若为本插件则执行遥测收集上报。"""
         exception = context.get("exception")
@@ -213,35 +222,35 @@ class PluginLifecycleService:
             logger.error(f"[灾害预警] 捕获未处理的异步错误: {message}")
 
         if self.plugin.telemetry and self.plugin.telemetry.enabled:
-            # 仅在遥测启用时补充异常上报，避免在禁用状态下继续创建额外任务。
-            if exception:
-                task = context.get("future")
-                # 尽量提取任务名称，便于后续在遥测中定位是哪一类后台任务出了问题。
-                task_name = "unknown"
-                if task:
-                    task_name = getattr(task, "get_name", lambda: str(task))()
-                    if not task_name or task_name == str(task):
-                        task_repr = repr(task)
-                        if "name=" in task_repr:
-                            match = re.search(r"name='([^']+)'", task_repr)
-                            if match:
-                                task_name = match.group(1)
-                error_task = asyncio.create_task(
-                    self.plugin.telemetry.track_error(
-                        exception,
-                        module=f"main.unhandled_async.{task_name}",
+            # 仅在遥测启用且事件循环存活时补充异常上报
+            if self._can_create_task():
+                if exception:
+                    task = context.get("future")
+                    task_name = "unknown"
+                    if task:
+                        task_name = getattr(task, "get_name", lambda: str(task))()
+                        if not task_name or task_name == str(task):
+                            task_repr = repr(task)
+                            if "name=" in task_repr:
+                                match = re.search(r"name='([^']+)'", task_repr)
+                                if match:
+                                    task_name = match.group(1)
+                    error_task = asyncio.create_task(
+                        self.plugin.telemetry.track_error(
+                            exception,
+                            module=f"main.unhandled_async.{task_name}",
+                        )
                     )
-                )
-            else:
-                runtime_error = RuntimeError(message)
-                error_task = asyncio.create_task(
-                    self.plugin.telemetry.track_error(
-                        runtime_error,
-                        module="main.unhandled_async",
+                else:
+                    runtime_error = RuntimeError(message)
+                    error_task = asyncio.create_task(
+                        self.plugin.telemetry.track_error(
+                            runtime_error,
+                            module="main.unhandled_async",
+                        )
                     )
-                )
-            self.plugin._telemetry_tasks.add(error_task)
-            error_task.add_done_callback(self.plugin._telemetry_tasks.discard)
+                self.plugin._telemetry_tasks.add(error_task)
+                error_task.add_done_callback(self.plugin._telemetry_tasks.discard)
 
     async def heartbeat_loop(self) -> None:
         """遥测心跳定时上报循环。"""

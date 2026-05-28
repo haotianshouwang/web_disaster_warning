@@ -1,8 +1,11 @@
 """
 版本信息辅助工具。
 负责读取插件版本与 AstrBot 版本，供状态展示、遥测上报等场景复用。
+
+在独立运行模式下，AstrBot 版本固定为 "standalone"。
 """
 
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -19,7 +22,6 @@ except ImportError:
     except ImportError:
         tomllib = None
 
-import astrbot
 from astrbot.api import logger
 
 
@@ -66,6 +68,18 @@ def _build_unknown_version_info(
 ) -> AstrBotVersionInfo:
     """构造未知版本探测结果。"""
     return AstrBotVersionInfo(version=default, source="unknown", error=error)
+
+
+def _get_astrbot_version_from_shim() -> AstrBotVersionInfo | None:
+    """从 shim 包读取版本（独立运行模式）。"""
+    try:
+        from astrbot import cli
+        version = str(getattr(cli, "__version__", "")).strip()
+        if version and version != "unknown":
+            return AstrBotVersionInfo(version=version, source="shim")
+    except Exception:
+        pass
+    return None
 
 
 def _get_astrbot_version_from_core_config() -> AstrBotVersionInfo | None:
@@ -132,7 +146,16 @@ def _get_astrbot_version_from_pyproject(default: str = "unknown") -> AstrBotVers
     """从 AstrBot 安装目录附近的 pyproject.toml 中兜底读取版本。"""
     try:
         # 从 astrbot 包路径定位 pyproject.toml
-        astrbot_path = Path(astrbot.__file__).resolve().parent.parent
+        try:
+            import astrbot
+            astrbot_file = astrbot.__file__
+        except (ImportError, AttributeError):
+            return _build_unknown_version_info(default, "astrbot_import_failed")
+
+        if astrbot_file is None:
+            return _build_unknown_version_info(default, "astrbot_no_file")
+
+        astrbot_path = Path(astrbot_file).resolve().parent.parent
         pyproject_path = astrbot_path / "pyproject.toml"
 
         if not pyproject_path.exists():
@@ -175,6 +198,11 @@ def _get_astrbot_version_from_pyproject(default: str = "unknown") -> AstrBotVers
 @lru_cache(maxsize=8)
 def get_astrbot_version_info(default: str = "unknown") -> AstrBotVersionInfo:
     """获取带来源与错误码的 AstrBot 版本探测结果。"""
+    # 优先检测 shim 包（独立运行模式）
+    shim_result = _get_astrbot_version_from_shim()
+    if shim_result is not None:
+        return shim_result
+
     # 逐个探测器尝试，按可靠性优先级从高到低回退
     for resolver in (
         _get_astrbot_version_from_core_config,
