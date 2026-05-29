@@ -13,6 +13,8 @@ from astrbot.api import logger
 from .....utils.geolocation import close_geoip_session
 from ....services.config.config_service import ConfigAccessor
 from ...dashboard.dashboard_connector import DashboardConnector
+from ...onebot.manager import OneBotManager
+from ...onebot.protocols import OneBotConfig
 from ...monitoring.source_health_monitor import SourceHealthMonitor
 from ...websocket.websocket_hub import WebSocketHub
 from ..payloads.api_response import ApiResponse
@@ -56,6 +58,7 @@ class WebAdminServer:
 
         # 延迟缓存容器，用于在健康监控与连接面板展示之间共享探测数值
         self._latency_cache: dict[str, float | None] = {}
+        self.dashboard_connector.set_latency_cache(self._latency_cache)
         self._source_health_monitor = SourceHealthMonitor(self._latency_cache)
 
         # 注入各不同职责的 Payload 生成器
@@ -72,6 +75,9 @@ class WebAdminServer:
         )
         self._auth_enabled = False
         self._auth_token: str | None = None
+
+        # OneBot 11 管理器（按 notification_channels 配置启动）
+        self._onebot_manager: OneBotManager | None = None
 
         # 注入后台运行时调度管理服务
         self._runtime_service = WebServerRuntimeService(self)
@@ -142,6 +148,11 @@ class WebAdminServer:
             self.app.mount(
                 "/", StaticFiles(directory=admin_dir, html=True), name="admin"
             )
+
+        # 注入 OneBot 热重启回调，供 notification_channel_routes 调用
+        self.app.state.restart_onebot = self._start_onebot_manager
+        # 注入 OneBot 管理器引用，供测试接口使用
+        self.app.state.onebot_manager_ref = lambda: self._onebot_manager
 
     def _register_routes(self):
         """注册 API 路由。"""
@@ -259,6 +270,11 @@ class WebAdminServer:
         """后台定期更新延迟缓存。"""
         await self._source_health_monitor.run_background_ping_loop(interval_seconds=30)
 
+    @property
+    def onebot_manager(self) -> OneBotManager | None:
+        """OneBot 11 管理器，供事件管道调用发送消息。"""
+        return self._onebot_manager
+
     async def start(self):
         """启动 Web 服务器。"""
         if not FASTAPI_AVAILABLE:
@@ -288,8 +304,70 @@ class WebAdminServer:
             f"[仪表盘] 连接器已启动 (key={'已设置' if self.dashboard_connector.auth_key else '无需鉴权'})"
         )
 
+        # 启动 OneBot 11 协议适配器（按 notification_channels 配置）
+        await self._start_onebot_manager()
+
+    async def _start_onebot_manager(self) -> None:
+        """读取配置并启动 OneBot 11 管理器（支持热重启）。"""
+        # 先停止旧实例
+        if self._onebot_manager:
+            try:
+                await self._onebot_manager.stop()
+            except Exception:
+                pass
+            self._onebot_manager = None
+
+        channels_cfg = self.config.get("notification_channels") or {}
+        ob_cfg = channels_cfg.get("onebot11") if isinstance(channels_cfg, dict) else {}
+        if not isinstance(ob_cfg, dict) or not ob_cfg:
+            return
+
+        def _b(v): return bool(v) if v is not None else False
+        def _s(v, default=""): return str(v) if v else default
+        def _p(v, default=0): return int(v) if v is not None else default
+
+        onebot_config = OneBotConfig(
+            http_server_enabled=_b(ob_cfg.get("http_server_enabled")),
+            http_server_host=_s(ob_cfg.get("http_server_host"), "0.0.0.0"),
+            http_server_port=_p(ob_cfg.get("http_server_port"), 5700),
+            http_server_path=_s(ob_cfg.get("http_server_path"), "/onebot"),
+            http_server_token=_s(ob_cfg.get("http_server_token")),
+            http_client_enabled=_b(ob_cfg.get("http_client_enabled")),
+            http_client_url=_s(ob_cfg.get("http_client_url"), "http://127.0.0.1:3000"),
+            http_client_token=_s(ob_cfg.get("http_client_token")),
+            ws_server_enabled=_b(ob_cfg.get("ws_server_enabled")),
+            ws_server_host=_s(ob_cfg.get("ws_server_host"), "0.0.0.0"),
+            ws_server_port=_p(ob_cfg.get("ws_server_port"), 5701),
+            ws_server_token=_s(ob_cfg.get("ws_server_token")),
+            ws_client_enabled=_b(ob_cfg.get("ws_client_enabled")),
+            ws_client_url=_s(ob_cfg.get("ws_client_url"), "ws://127.0.0.1:3001"),
+            ws_client_token=_s(ob_cfg.get("ws_client_token")),
+            access_token=_s(ob_cfg.get("access_token")),
+        )
+
+        any_enabled = (
+            onebot_config.http_server_enabled
+            or onebot_config.http_client_enabled
+            or onebot_config.ws_server_enabled
+            or onebot_config.ws_client_enabled
+        )
+        if not any_enabled:
+            return
+
+        try:
+            self._onebot_manager = OneBotManager(onebot_config)
+            await self._onebot_manager.start()
+            logger.info("[OneBot] 协议适配器已启动")
+        except Exception as e:
+            logger.warning(f"[OneBot] 启动失败: {e}")
+
     async def stop(self):
         """停止 Web 服务器。"""
+        # -1. 停止 OneBot 管理器
+        if self._onebot_manager:
+            await self._onebot_manager.stop()
+            logger.info("[OneBot] 协议适配器已停止")
+
         # 0. 停止仪表盘连接器
         await self.dashboard_connector.stop()
 
@@ -327,3 +405,14 @@ class WebAdminServer:
                 except asyncio.TimeoutError:
                     self._server_task.cancel()
             logger.info("[灾害预警] Web 管理端已停止")
+
+        # 6. 关闭 Playwright 浏览器实例（防止 EPIPE）
+        try:
+            ds = self.disaster_service
+            mgr = getattr(ds, "message_manager", None)
+            bm = getattr(mgr, "browser_manager", None) if mgr else None
+            if bm and hasattr(bm, "cleanup"):
+                await bm.cleanup()
+                logger.debug("[灾害预警] 浏览器资源已清理")
+        except Exception:
+            pass

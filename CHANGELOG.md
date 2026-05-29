@@ -5,6 +5,41 @@
 <!-- markdownlint-disable MD041 -->
 # ChangeLog
 
+# 2026/05/30 v2.0.0
+
+> 🎉 **重大更新：独立通知通道 + 图文推送**
+
+经过持续开发，插件现已支持独立于 AstrBot 的完整通知通道体系——QQ(OneBot11)、邮件(SMTP)、Web 仪表盘三路并发，全图文支持。
+
+## 🚀 What's Changed
+
+### ✨ New Features (新功能)
+
+- **OneBot 11 通知通道**：直连 NapCat/LLOneBot，四种协议模式（HTTP Server/Client、WS Server/Client），独立 Token，热重启
+- **邮件通知通道 (SMTP)**：多收件人、发件人名称、Html 邮件、MIME 内嵌图片 + URL 图片
+- **事件类型过滤**：地震/气象/海啸各通道独立开关
+- **多目标推送**：QQ 支持多群+多私聊，邮件支持多收件人，每目标独立启用/禁用
+- **全通道图片支持**：
+  - QQ → `[CQ:image,file=base64://...]` CQ 码
+  - 邮件 → MIME multipart 内嵌 + `<img src="url">`
+  - Web 仪表盘 → data URI + URL 缩略图展示
+- **异步卡片渲染**：USGS/Global Quake 自动渲染信息卡片，地图、图标全覆盖
+- **配置热重启**：OneBot 配置变更后自动热重启适配器
+
+### 🔧 Improvements (改进)
+
+- CLI 终端全量展示不过滤
+- Web 仪表盘实时推送不受防重启限制
+- 仪表盘消息持久化启动时自动清空，避免回放历史
+- Playwright 退出时序优化，消除 EPIPE 异常
+
+### 🛡 Security (安全)
+
+- API 返回的 Token/授权码等敏感字段自动掩码 (`***`)
+- 通知通道配置页 GET 接口屏蔽敏感信息
+
+---
+
 # 2026/05/24 v1.5.0
 
 经过了一个多月的开发，1.5.0 版本也是终于和大家见面了！为了后续更好的可拓展性与可维护性，我下了很大力气，几乎直接重构了整个插件。

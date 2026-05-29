@@ -61,6 +61,13 @@
             component: () => <MarkdownDocsView />,
         },
         {
+            id: 'channels',
+            label: '通知通道',
+            icon: '📬',
+            title: '通知通道配置',
+            component: () => <NotifyChannelsView />,
+        },
+        {
             id: 'config',
             label: '配置管理',
             icon: '⚙️',

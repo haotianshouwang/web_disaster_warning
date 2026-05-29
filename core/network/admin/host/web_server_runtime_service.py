@@ -24,6 +24,7 @@ from ..api.analytics_routes import register_analytics_routes
 from ..api.auth_routes import register_auth_routes
 from ..api.config_routes import register_config_routes
 from ..api.events_routes import register_events_routes
+from ..api.notification_channel_routes import register_notification_channel_routes
 from ..api.notification_routes import register_notification_routes
 from ..api.runtime_admin_routes import register_runtime_admin_routes
 from ..api.runtime_routes import register_runtime_routes
@@ -109,6 +110,7 @@ class WebServerRuntimeService:
             config=self.server.config,
         )
         register_config_routes(app, config=self.server.config)
+        register_notification_channel_routes(app, config=self.server.config)
         register_session_config_routes(
             app, disaster_service=self.server.disaster_service
         )

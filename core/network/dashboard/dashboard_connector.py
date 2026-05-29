@@ -40,6 +40,9 @@ class DashboardConnector:
         self._enabled = enabled
         self._key = (key or "").strip()
 
+    def set_latency_cache(self, cache: dict[str, float | None]) -> None:
+        self._latency_cache = cache
+
     @property
     def enabled(self) -> bool:
         return self._enabled
@@ -83,9 +86,10 @@ class DashboardConnector:
             self.remove(ws)
 
     async def send_full_update(self, websocket) -> None:
-        """向新客户端发送全量快照 + 历史消息回放。"""
+        """向新客户端发送全量快照 + 持久化推送历史。"""
         data = await self._build_snapshot()
-        data["recent_messages"] = list(self._message_history)
+        # 内存历史 + 文件持久化历史合并，取最新 100 条
+        data["recent_messages"] = self._load_persisted_messages()
         await self._send_json(websocket, {"type": "full_update", "data": data})
 
     async def broadcast_snapshot(self) -> None:
@@ -103,9 +107,10 @@ class DashboardConnector:
         })
 
     async def broadcast_push_message(
-        self, text: str, event_type: str = "", source: str = "", timestamp: str = ""
+        self, text: str, event_type: str = "", source: str = "", timestamp: str = "",
+        images: list | None = None,
     ) -> None:
-        """推送预警消息到仪表盘，并写入历史缓存。"""
+        """推送预警消息到仪表盘，并写入历史缓存+持久化文件。images: [{\"type\":\"base64\"/\"url\",\"data\":\"...\"}]"""
         ts = timestamp or datetime.now().isoformat()
         msg = {
             "type": "push_message",
@@ -113,8 +118,10 @@ class DashboardConnector:
             "event_type": event_type,
             "source": source,
             "timestamp": ts,
+            "images": images or [],
         }
         self._message_history.append(dict(msg))
+        self._persist_message(dict(msg))
         await self.send_to_all(msg)
 
     async def send_event(self, websocket, page: int, limit: int,
@@ -207,7 +214,20 @@ class DashboardConnector:
                 "connection_details": st.get("connection_details", {}),
                 "connections": st.get("connections", {}),
                 "version": st.get("version", "-"),
+                "eew_query_status": svc.get_eew_query_status_data() if hasattr(svc, "get_eew_query_status_data") else None,
             }
+            # 注入延迟缓存到 connections
+            latency = getattr(self, '_latency_cache', {}) or {}
+            if latency and data["status"].get("connections"):
+                _display = {
+                    "fan_studio_all": "FAN Studio",
+                    "p2p_main": "P2P地震情報",
+                    "wolfx_all": "Wolfx",
+                    "global_quake": "Global Quake",
+                }
+                for cache_key, display_name in _display.items():
+                    if cache_key in latency and display_name in data["status"]["connections"]:
+                        data["status"]["connections"][display_name]["latency"] = latency[cache_key]
         except Exception as e:
             logger.debug(f"[仪表盘] 获取状态失败: {e}")
             data["status"] = {"running": False, "uptime": "-", "connections": {}}
@@ -242,7 +262,11 @@ class DashboardConnector:
                     "by_type": dict(stats_state.get("weather_stats", {}).get("by_type", {})),
                     "by_region": dict(stats_state.get("weather_stats", {}).get("by_region", {})),
                 },
-                "log_stats": stats_state.get("log_stats"),
+                "log_stats": (
+                    svc.message_logger.get_log_summary()
+                    if hasattr(svc, "message_logger") and svc.message_logger
+                    else None
+                ),
                 "recent_pushes": stats_state.get("recent_pushes", []) or [],
             }
         except Exception as e:
@@ -278,9 +302,78 @@ class DashboardConnector:
 
         return data
 
+    # ── 持久化 ────────────────────────────────
+
+    def _persist_message(self, msg: dict) -> None:
+        """将推送消息追加写入本地 JSON 文件。"""
+        try:
+            import json
+            path = self._get_persist_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            entry = {"text": msg.get("text", ""), "event_type": msg.get("event_type", ""),
+                     "source": msg.get("source", ""), "timestamp": msg.get("timestamp", "")}
+            lines = []
+            if path.exists():
+                lines = path.read_text(encoding="utf-8").strip().split("\n")
+            lines.append(json.dumps(entry, ensure_ascii=False))
+            # 仅保留最近 200 条
+            if len(lines) > 200:
+                lines = lines[-200:]
+            path.write_text("\n".join(lines), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"[仪表盘] 持久化推送消息失败: {e}")
+
+    def _load_persisted_messages(self) -> list[dict]:
+        """加载内存+文件历史合并去重，按时间倒序取最新。"""
+        _MAX = 100
+        seen = set()
+        merged = list(self._message_history)
+        for m in merged:
+            seen.add((m.get("text", ""), m.get("timestamp", "")))
+        try:
+            path = self._get_persist_path()
+            if path.exists():
+                import json
+                for line in path.read_text(encoding="utf-8").strip().split("\n"):
+                    if not line.strip():
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        key = (entry.get("text", ""), entry.get("timestamp", ""))
+                        if key not in seen:
+                            seen.add(key)
+                            merged.append(entry)
+                    except json.JSONDecodeError:
+                        pass
+        except Exception as e:
+            logger.debug(f"[仪表盘] 加载持久化推送历史失败: {e}")
+        merged.sort(key=lambda m: str(m.get("timestamp", "")), reverse=True)
+        return merged[:_MAX]
+
+    def _get_persist_path(self):
+        from pathlib import Path
+        try:
+            from astrbot.api.star import StarTools
+            d = StarTools.get_data_dir("astrbot_plugin_disaster_warning")
+        except Exception:
+            d = Path("./data/plugin_data")
+        return Path(d) / "dashboard_messages.jsonl"
+
+    def _truncate_persist_file(self) -> None:
+        """启动时清空持久化文件，避免重启回放旧消息。"""
+        try:
+            path = self._get_persist_path()
+            if path.exists():
+                path.write_text("", encoding="utf-8")
+                logger.debug(f"[仪表盘] 已清空持久化消息文件: {path}")
+        except Exception:
+            pass
+
     # ── 生命周期 ──────────────────────────────
 
     async def start_broadcast_loop(self) -> None:
+        # 启动时清理旧的持久化消息文件（避免重启回放历史）
+        self._truncate_persist_file()
         if self._broadcast_task is not None:
             return
         self._broadcast_task = asyncio.create_task(self._broadcast_loop())

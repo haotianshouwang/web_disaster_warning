@@ -131,15 +131,12 @@ class BrowserManager:
                 )
 
             except Exception as e:
-                logger.error(f"[灾害预警] 浏览器初始化失败: {e}")
-                # 上报浏览器初始化错误到遥测
+                logger.warning(f"[灾害预警] 浏览器初始化失败(图片渲染不可用): {e}")
                 if self._telemetry and self._telemetry.enabled:
                     await self._telemetry.track_error(
                         e, module="core.browser_manager.initialize"
                     )
-                # 清理已创建的资源
                 await self._cleanup()
-                raise
 
     async def _initialize_local_page_pool(self):
         """初始化本地浏览器的页面池"""
@@ -561,18 +558,8 @@ class BrowserManager:
             cleanup_errors.append(f"清理页面池失败: {e}")
             logger.warning(f"[灾害预警] 清理页面池时发生异常: {e}")
 
-        # 步骤 2: 关闭浏览器
-        try:
-            if self._browser:
-                await self._browser.close()
-                self._browser = None
-        except Exception as e:
-            cleanup_errors.append(f"关闭浏览器失败: {e}")
-            logger.warning(f"[灾害预警] 关闭浏览器失败: {e}")
-            # 即使关闭失败,也强制置空引用,防止后续误用
-            self._browser = None
 
-        # 步骤 3: 停止 Playwright
+        # 步骤 2: 停止 Playwright（先停框架，内部会处理浏览器）
         try:
             if self._playwright:
                 await self._playwright.stop()
@@ -580,8 +567,17 @@ class BrowserManager:
         except Exception as e:
             cleanup_errors.append(f"停止 Playwright 失败: {e}")
             logger.warning(f"[灾害预警] 停止 Playwright 失败: {e}")
-            # 即使停止失败,也强制置空引用
             self._playwright = None
+
+        # 步骤 3: 关闭浏览器（兜底）
+        try:
+            if self._browser:
+                await self._browser.close()
+                self._browser = None
+        except Exception as e:
+            cleanup_errors.append(f"关闭浏览器失败: {e}")
+            logger.warning(f"[灾害预警] 关闭浏览器失败: {e}")
+            self._browser = None
 
         # 标记为未初始化
         self._initialized = False
@@ -593,8 +589,5 @@ class BrowserManager:
             )
 
     def __del__(self):
-        """析构函数 - 确保资源释放"""
-        if self._browser or self._playwright:
-            logger.warning(
-                "[灾害预警] 检测到未正常关闭的浏览器资源，这可能导致进程泄漏"
-            )
+        """析构函数 - 静默跳过（资源应由 cleanup() 主动释放）"""
+        pass

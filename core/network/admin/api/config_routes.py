@@ -55,11 +55,20 @@ def register_config_routes(app, *, config):
         """获取完整配置。"""
         try:
             full = dict(config)
-            # 即便是完整配置读取接口，也要显式屏蔽管理端密码字段。
+            # 屏蔽管理端密码
             if "web_admin" in full and isinstance(full["web_admin"], dict):
                 full["web_admin"] = {
                     k: v for k, v in full["web_admin"].items() if k != "password"
                 }
+            # 屏蔽通知通道敏感字段
+            sensitive = {"auth_code", "access_token", "http_server_token", "http_client_token", "ws_server_token", "ws_client_token"}
+            nc = full.get("notification_channels", {})
+            if isinstance(nc, dict):
+                for ch in ("email", "onebot11"):
+                    if ch in nc and isinstance(nc[ch], dict):
+                        for k in sensitive:
+                            if k in nc[ch] and nc[ch][k]:
+                                nc[ch][k] = "***"
             return ApiResponse.success(full)
         except Exception as e:
             logger.error(f"[灾害预警] 获取完整配置失败: {e}")
@@ -92,6 +101,15 @@ def register_config_routes(app, *, config):
 
             if hasattr(config, "save_config"):
                 config.save_config()
+
+            # notification_channels 变更后触发 OneBot 热重启
+            if "notification_channels" in config_data:
+                restart_fn = getattr(app.state, "restart_onebot", None)
+                if restart_fn:
+                    try:
+                        await restart_fn()
+                    except Exception as e:
+                        logger.warning(f"[配置管理] OneBot 热重启失败: {e}")
 
             return ApiResponse.success({"success": True, "message": "配置已校验并保存"})
         except Exception as e:

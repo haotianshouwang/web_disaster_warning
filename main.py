@@ -1,17 +1,17 @@
-"""灾害预警插件 —— 统一入口。
-
-支持两种运行模式：
-  - AstrBot 插件模式：被 AstrBot 框架加载，通过 @filter.command 注册命令
-  - 独立运行模式：python main.py，自动启动 Web 管理端 + CLI 交互控制台
-
-独立运行用法:
-    python main.py                  # 启动服务 + WebUI + 交互 CLI
-    python main.py --no-web         # 仅 CLI（不启动 Web 管理端）
-    python main.py --no-interactive # 仅后台服务
-    python main.py --help           # 查看所有选项
-"""
+"""灾害预警插件 —— 统一入口。"""
 
 from __future__ import annotations
+
+# ── 静默 Python 3.14 Windows asyncio 退出时的 GC 清理警告 ──
+import warnings, sys
+warnings.filterwarnings("ignore")
+# 替换 unraisable hook，防止 __del__ 的 ValueError + Playwright 关闭异常污染输出
+_orig_hook = sys.unraisablehook
+def _quiet_hook(args):
+    msg = str(args.exc_value) if args.exc_value else ""
+    if "closed pipe" not in msg and "unclosed transport" not in msg and "Connection closed while reading" not in msg:
+        _orig_hook(args)
+sys.unraisablehook = _quiet_hook
 
 import sys
 from pathlib import Path
@@ -591,17 +591,20 @@ def _parse_args() -> argparse.Namespace:
 
 # 独立运行入口
 if _STANDALONE:
+    import signal
     _args = _parse_args()
     try:
         asyncio.run(_standalone_main(_args))
     except KeyboardInterrupt:
-        pass
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def _entry_point():
     """console_scripts 入口点。pip install 后可通过 disaster-warning 命令直接启动。"""
+    import signal
     _args = _parse_args()
     try:
         asyncio.run(_standalone_main(_args))
     except KeyboardInterrupt:
-        pass
+        # 屏蔽后续 SIGINT，防止 threading._shutdown 中二次触发
+        signal.signal(signal.SIGINT, signal.SIG_IGN)

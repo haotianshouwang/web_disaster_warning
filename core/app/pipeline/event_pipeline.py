@@ -21,9 +21,7 @@ class EventPipeline:
     """
 
     def __init__(self, service):
-        # 这里保存的是主服务实例引用，不复制任何运行时状态，
-        # 以确保流水线始终读取到最新的配置、连接状态与消息推送结果。
-        self.service = service  # 主服务 DisasterWarningService 的引用
+        self.service = service
 
     async def handle(self, event: EventEnvelope) -> None:
         """
@@ -42,15 +40,25 @@ class EventPipeline:
         # 流水线从这里开始只处理“标准化后的应用层事件”。
 
         # 第二阶段：按会话级配置执行推送。
-        # 目标会话列表给出候选范围，会话配置读取函数则按会话返回生效配置，
-        # 两者组合后，消息管理器即可在一次事件处理中执行差异化过滤与渲染。
-        target_sessions = (
+        # CLI 终端会话始终隐式注入（不占用配置列表），接收每一报，不过滤。
+        CLI_SESSION = "standalone:Message:cli"
+        target_sessions = list(
             self.service.session_config_manager.list_target_sessions()
-        )  # 获取所有目标会话
+        )
+        if CLI_SESSION not in target_sessions:
+            target_sessions.insert(0, CLI_SESSION)
+        # CLI 不过滤：overwrite 其 effective config 去掉时间/震级约束
+        _orig_getter = self.service.session_config_manager.get_effective_config
+        def _cli_no_filter(sid):
+            cfg = dict(_orig_getter(sid))
+            if sid == CLI_SESSION:
+                cfg.pop("max_event_age", None)
+                cfg.pop("min_magnitude", None)
+            return cfg
         push_result = await self.service.message_manager.push_event(
             event,
             target_sessions=target_sessions,
-            session_config_getter=self.service.session_config_manager.get_effective_config,
+            session_config_getter=_cli_no_filter,
         )
         if not push_result:
             # 未推送不一定代表异常，常见原因包括规则过滤未命中、会话未订阅，或事件被静默策略抑制。
@@ -76,30 +84,261 @@ class EventPipeline:
             except Exception as ws_e:
                 logger.debug(f"[灾害预警] WebSocket 通知失败: {ws_e}")
 
-        # 第五阶段：向仪表盘前端广播推送消息文本。
-        if self.service.web_admin_server and push_result:
-            try:
-                connector = self.service.web_admin_server.dashboard_connector
-                if connector.enabled:
-                    msg_text = self._build_push_message_text(event)
-                    if msg_text:
+        # 第五-六阶段：仪表盘 + QQ + 邮件
+        should_notify = push_result if target_sessions else True
+        msg_text, msg_images = await self._build_push_message(event)
+
+        if msg_text and self.service.config.get("enabled", True) and should_notify:
+            if self.service.web_admin_server:
+                try:
+                    connector = self.service.web_admin_server.dashboard_connector
+                    if connector.enabled:
                         await connector.broadcast_push_message(
                             text=msg_text,
                             event_type=envelope.event_type or "",
                             source=envelope.source_id or "",
                             timestamp=datetime.now().isoformat(),
+                            images=msg_images,
                         )
-            except Exception as push_ws_e:
-                logger.debug(f"[灾害预警] 推送消息广播失败: {push_ws_e}")
+                except Exception as push_ws_e:
+                    logger.debug(f"[灾害预警] 推送消息广播失败: {push_ws_e}")
 
-    def _build_push_message_text(self, event: EventEnvelope) -> str:
-        """构建与 QQ 推送相同格式的消息文本。"""
+            await self._send_onebot_notification(envelope.event_type, msg_text, msg_images)
+            await self._send_email_notification(envelope.event_type, msg_text, msg_images)
+
+    async def _build_push_message(self, event: EventEnvelope) -> tuple[str, list[dict]]:
+        """异步构建推送消息 (纯文本, 图片列表)。包含卡片渲染、地图、图标。"""
         try:
-            source_id = getattr(event, "source_id", "") or ""
-            message_format_config = self.service.config.get("message_format", {})
-            chain = self.service.message_manager.message_build_service.build_message(event)
-            if chain is not None and hasattr(chain, "to_plain_text"):
-                return chain.to_plain_text()
+            chain = await self.service.message_manager.message_build_service.build_message_async(event)
+            if chain is None:
+                return "", []
+            raw_text = chain.to_plain_text() if hasattr(chain, "to_plain_text") else ""
+            images = list(self._iter_chain_images(chain))
+            # 去除 to_plain_text 生成的 [图片: ...] 占位符
+            import re
+            clean_text = re.sub(r'\n?\[图片[^\]]*\]', '', raw_text).strip()
+            if images:
+                logger.info(f"[管道] 消息含 {len(images)} 张图片: {[img['type'] for img in images]}")
+            return clean_text, images
         except Exception as e:
-            logger.debug(f"[灾害预警] 构建推送消息文本失败: {e}")
-        return ""
+            logger.debug(f"[灾害预警] 构建推送消息失败: {e}")
+        return "", []
+
+    @staticmethod
+    def _iter_chain_images(chain):
+        """从 MessageChain 递归提取 Image 组件 → yield {"type","data"}。"""
+        items = getattr(chain, "chain", None)
+        if items is None:
+            items = [chain] if not isinstance(chain, (list, tuple)) else chain
+        for item in list(items if isinstance(items, (list, tuple)) else [items]):
+            _type = getattr(item, "_type", "")
+            data = getattr(item, "data", {}) or {}
+            if _type == "image_base64":
+                b64 = data.get("base64", "")
+                if b64:
+                    yield {"type": "base64", "data": b64}
+            elif _type == "image_url":
+                url = data.get("url", "")
+                if url:
+                    yield {"type": "url", "data": url}
+            elif _type == "image_file":
+                path = data.get("file_path", "")
+                if path:
+                    yield {"type": "file", "data": path}
+            # 递归
+            for sub_attr in ("chain", "children", "nodes", "sub_chain"):
+                sub = getattr(item, sub_attr, None)
+                if sub and isinstance(sub, (list, tuple)):
+                    yield from EventPipeline._iter_chain_images(sub)
+
+    async def _send_onebot_notification(self, event_type: str, text: str, images: list[dict]) -> None:
+        """通过 OneBot 11 发送 QQ 通知（遍历所有已启用目标，按类型过滤，含图片CQ码）。"""
+        if not text:
+            return
+        try:
+            server = self.service.web_admin_server
+            if not server:
+                return
+            mgr = getattr(server, "onebot_manager", None)
+            if not mgr or not mgr.connected:
+                return
+            cfg = server.config.get("notification_channels", {}).get("onebot11", {})
+            if not isinstance(cfg, dict) or not cfg:
+                return
+
+            # 类型过滤
+            filter_types = cfg.get("filter_types", {})
+            if isinstance(filter_types, dict):
+                mapped = {"地震": "earthquake", "海啸": "tsunami", "气象": "weather"}
+                etype_key = mapped.get(event_type, event_type or "")
+                if etype_key in filter_types and not filter_types[etype_key]:
+                    return
+
+            # 拼接 OneBot CQ 图片码
+            full_msg = text
+            for img in images:
+                if img["type"] == "base64":
+                    full_msg += f"[CQ:image,file=base64://{img['data']}]"
+                elif img["type"] == "url":
+                    full_msg += f"[CQ:image,file={img['data']}]"
+                elif img["type"] == "file":
+                    full_msg += f"[CQ:image,file=file:///{img['data']}]"
+
+            # 遍历所有目标
+            targets = cfg.get("targets", [])
+            if isinstance(cfg, dict) and not targets:
+                # 兼容旧单目标配置
+                old_type = cfg.get("target_type", "group")
+                old_id = str(cfg.get("target_id", ""))
+                if old_id:
+                    targets = [{"type": old_type, "id": old_id, "enabled": True}]
+            if not isinstance(targets, list):
+                targets = []
+
+            for t in targets:
+                if not isinstance(t, dict):
+                    continue
+                if not t.get("enabled", True):
+                    continue
+                tid_str = str(t.get("id", "")).strip()
+                if not tid_str:
+                    continue
+                ttype = t.get("type", "group")
+                tid = int(tid_str) if tid_str.isdigit() else tid_str
+                try:
+                    if ttype == "private":
+                        result = await mgr.send_private_msg(tid, full_msg)
+                    else:
+                        result = await mgr.send_group_msg(tid, full_msg)
+                    if result.get("status") == "ok" or result.get("retcode") == 0:
+                        logger.info(f"[OneBot] QQ通知已发送: {ttype}/{tid}")
+                    else:
+                        logger.warning(f"[OneBot] QQ通知失败 ({ttype}/{tid}): {result}")
+                except Exception as e:
+                    logger.warning(f"[OneBot] QQ通知异常 ({ttype}/{tid}): {e}")
+        except Exception as e:
+            logger.warning(f"[OneBot] QQ通知发送失败: {e}")
+
+    async def _send_email_notification(self, event_type: str, text: str, images: list[dict]) -> None:
+        """通过邮件通道发送通知（遍历收件人，按类型过滤，内嵌图片）。"""
+        if not text:
+            return
+        try:
+            server = self.service.web_admin_server
+            if not server:
+                return
+            cfg = server.config.get("notification_channels", {}).get("email", {})
+            if not isinstance(cfg, dict) or not cfg.get("enabled"):
+                return
+
+            # 类型过滤
+            filter_types = cfg.get("filter_types", {})
+            if isinstance(filter_types, dict):
+                mapped = {"地震": "earthquake", "海啸": "tsunami", "气象": "weather"}
+                etype_key = mapped.get(event_type, event_type or "")
+                if etype_key in filter_types and not filter_types[etype_key]:
+                    return
+
+            # 遍历收件人
+            targets = cfg.get("targets", [])
+            if not targets:
+                old = str(cfg.get("receiver_emails", "")).strip()
+                if old:
+                    targets = [{"email": e.strip(), "enabled": True} for e in old.split(",") if e.strip()]
+            receivers = [str(t["email"]).strip() for t in targets
+                         if isinstance(t, dict) and t.get("enabled", True) and str(t.get("email", "")).strip()]
+            if not receivers:
+                return
+
+            host = str(cfg.get("smtp_host", "smtp.qq.com")).strip()
+            port = int(cfg.get("smtp_port", 465))
+            sender = str(cfg.get("sender_email", "")).strip()
+            auth_code = str(cfg.get("auth_code", "")).strip()
+            sender_name = str(cfg.get("sender_name", "灾害预警")).strip()
+            if not sender or not auth_code:
+                return
+
+            # 构建邮件（支持内嵌图片 MIME multipart）
+            import smtplib, ssl, asyncio, base64 as _b64
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+            from email.mime.image import MIMEImage
+
+            # 提取并解码图片
+            real_images: list[bytes] = []
+            html_img_urls: list[str] = []  # URL 图片直接嵌 <img>
+            if images:
+                logger.info(f"[邮件] 准备处理 {len(images)} 张图片: {[img['type'] for img in images]}")
+            for img in images:
+                try:
+                    if img["type"] == "base64":
+                        raw = img["data"]
+                        if "," in raw and "base64" in raw.split(",")[0]:
+                            raw = raw.split(",", 1)[1]
+                        b = _b64.b64decode(raw, validate=True)
+                        real_images.append(b)
+                        logger.debug(f"[邮件] base64解码成功: {len(b)} 字节")
+                    elif img["type"] == "url":
+                        url = img["data"]
+                        html_img_urls.append(url)
+                        logger.info(f"[邮件] URL图片: {url[:80]}...")
+                    elif img["type"] == "file":
+                        try:
+                            with open(img["data"], "rb") as f:
+                                b = f.read()
+                                real_images.append(b)
+                        except Exception as fe:
+                            logger.warning(f"[邮件] 读取文件图片失败: {fe}")
+                except Exception as de:
+                    logger.warning(f"[邮件] 图片解码失败 (type={img.get('type')}, len={len(str(img.get('data','')))}): {de}")
+
+            clean_text = text.replace("📋", "").replace("🏷️", "").replace("📝", "").replace("⏰", "")
+            first_line = text.strip().split("\n")[0] if text else "灾害预警"
+            has_any_img = real_images or html_img_urls
+
+            if has_any_img:
+                msg = MIMEMultipart("related")
+                html = f"<pre style='font-size:14px;line-height:1.7;'>{clean_text}</pre>"
+                # 内嵌 base64 图片 (cid)
+                for i, img_bytes in enumerate(real_images):
+                    cid = f"img{i}"
+                    html += f'<br><img src="cid:{cid}" style="max-width:100%;border-radius:8px;">'
+                    mime_img = MIMEImage(img_bytes, _subtype="png")
+                    mime_img.add_header("Content-ID", f"<{cid}>")
+                    mime_img.add_header("Content-Disposition", "inline")
+                    msg.attach(mime_img)
+                # URL 图片直接嵌 <img src>
+                for url in html_img_urls:
+                    html += f'<br><img src="{url}" style="max-width:100%;border-radius:8px;" referrerpolicy="no-referrer">'
+                msg.attach(MIMEText(html, "html", "utf-8"))
+            else:
+                msg = MIMEText(
+                    f"<pre style='font-size:14px;line-height:1.7;'>{clean_text}</pre>",
+                    "html", "utf-8",
+                )
+
+            msg["Subject"] = f"🚨 {first_line[:60]}"
+            msg["From"] = f"{sender_name} <{sender}>"
+
+            def _send():
+                if port == 465:
+                    ctx = ssl.create_default_context()
+                    with smtplib.SMTP_SSL(host, port, context=ctx, timeout=10) as srv:
+                        srv.login(sender, auth_code)
+                        srv.sendmail(sender, receivers, msg.as_string())
+                else:
+                    with smtplib.SMTP(host, port, timeout=10) as srv:
+                        srv.starttls(context=ssl.create_default_context())
+                        srv.login(sender, auth_code)
+                        srv.sendmail(sender, receivers, msg.as_string())
+
+            await asyncio.to_thread(_send)
+            img_info = ""
+            if real_images or html_img_urls:
+                parts = []
+                if real_images: parts.append(f"{len(real_images)}张内嵌")
+                if html_img_urls: parts.append(f"{len(html_img_urls)}张链接")
+                img_info = f" (含{' + '.join(parts)}图片)"
+            logger.info(f"[邮件] 通知已发送: {sender} -> {len(receivers)} 人{img_info}")
+        except Exception as e:
+            logger.warning(f"[邮件] 发送失败: {e}")
