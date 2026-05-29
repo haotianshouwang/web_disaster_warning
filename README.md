@@ -2,7 +2,7 @@
 <!-- markdownlint-disable MD033 -->
 <!-- markdownlint-disable MD041 -->
 
-> **🔌 独立运行模式**：本项目现支持脱离 AstrBot 框架独立运行，通过 CLI 命令行或 Web 管理端直接使用灾害预警功能。！！！目前还在开发，为了与主仓库区别，所以本仓库取名web_disaster_warning ！！！请注意拉取本仓库的路径！！！
+> **🔌 独立 Web 仪表盘**：本项目现已支持独立的 Web 仪表盘前端，通过 WebSocket 连接后端获取全部实时数据（运行状态/事件列表/数据统计/实时推送），纯只读安全设计。仪表盘前端为独立项目，可部署到任意静态服务器。！！！本仓库为独立 Web 版，与主仓库区分，请注意拉取路径！！！
 
 ![astrbot_plugin_disaster_warning](https://socialify.git.ci/DBJD-CR/astrbot_plugin_disaster_warning/image?custom_description=%F0%9F%9A%A8+%E4%B8%80%E4%B8%AA%E5%9F%BA%E4%BA%8E+AstrBot+%E7%9A%84%E5%A4%9A%E6%95%B0%E6%8D%AE%E6%BA%90%E7%81%BE%E5%AE%B3%E9%A2%84%E8%AD%A6%E6%8F%92%E4%BB%B6&description=1&font=Inter&forks=1&issues=1&language=1&name=1&owner=1&pattern=Charlie+Brown&pulls=1&stargazers=1&theme=Auto)
 
