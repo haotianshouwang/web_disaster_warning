@@ -12,6 +12,7 @@ from astrbot.api import logger
 
 from .....utils.geolocation import close_geoip_session
 from ....services.config.config_service import ConfigAccessor
+from ...dashboard.dashboard_connector import DashboardConnector
 from ...monitoring.source_health_monitor import SourceHealthMonitor
 from ...websocket.websocket_hub import WebSocketHub
 from ..payloads.api_response import ApiResponse
@@ -49,6 +50,9 @@ class WebAdminServer:
         self._broadcast_task = None
         self._ping_task = None
         self._ws_hub = WebSocketHub()
+
+        # 仪表盘连接器（独立于管理端 WebSocket）
+        self.dashboard_connector = DashboardConnector(disaster_service)
 
         # 延迟缓存容器，用于在健康监控与连接面板展示之间共享探测数值
         self._latency_cache: dict[str, float | None] = {}
@@ -132,7 +136,7 @@ class WebAdminServer:
 
         self._register_routes()
 
-        # 装载静态网页资源目录
+        # 装载管理端静态网页资源目录
         admin_dir = Path(__file__).resolve().parents[4] / "admin"
         if admin_dir.exists():
             self.app.mount(
@@ -144,10 +148,76 @@ class WebAdminServer:
         # 装载全部 HTTP 端点路由定义
         self._runtime_service.register_routes()
 
+        # 仪表盘连接器配置
+        dash_cfg = self.config.get("dashboard", {})
+        if isinstance(dash_cfg, dict):
+            self.dashboard_connector.configure(
+                enabled=dash_cfg.get("enabled", True),
+                key=dash_cfg.get("key", ""),
+            )
+
         @self.app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
             """管理端 WebSocket 实时推送端点。"""
             await self._runtime_service.handle_websocket(websocket)
+
+        @self.app.websocket("/dashboard/ws")
+        async def dashboard_ws_endpoint(websocket: WebSocket):
+            """仪表盘 WebSocket 端点。使用独立鉴权密钥。"""
+            connector = self.dashboard_connector
+            if not connector.enabled:
+                await websocket.close(code=1008, reason="仪表盘已禁用")
+                return
+
+            # 鉴权：从 query param 或 header 获取 key
+            key = websocket.query_params.get("key", "")
+            if not key:
+                auth_header = websocket.headers.get("authorization", "")
+                if auth_header.lower().startswith("bearer "):
+                    key = auth_header[7:].strip()
+
+            expected = connector.auth_key
+            if expected and not secrets.compare_digest(key, expected):
+                await websocket.close(code=1008, reason="仪表盘密钥错误")
+                return
+
+            await websocket.accept()
+            connector.add(websocket)
+            logger.info(f"[仪表盘] 客户端已连接 (共 {connector.count()} 个)")
+
+            try:
+                # 发送全量快照
+                await connector.send_full_update(websocket)
+
+                # 消息循环
+                while True:
+                    try:
+                        data = await websocket.receive_json()
+                    except Exception:
+                        break
+                    t = data.get("type", "") if isinstance(data, dict) else ""
+                    if t == "ping":
+                        await websocket.send_json({"type": "pong"})
+                    elif t == "refresh":
+                        await connector.send_full_update(websocket)
+                    elif t == "query_events":
+                        await connector.send_event(
+                            websocket,
+                            page=data.get("page", 1),
+                            limit=data.get("limit", 50),
+                            event_type=data.get("event_type", ""),
+                            sources=data.get("sources", ""),
+                            min_magnitude=data.get("min_magnitude", ""),
+                            magnitude_order=data.get("magnitude_order", ""),
+                            keyword=data.get("keyword", ""),
+                            level_filter=data.get("level_filter", ""),
+                            qid=data.get("qid", ""),
+                        )
+            except Exception:
+                pass
+            finally:
+                connector.remove(websocket)
+                logger.debug(f"[仪表盘] 客户端已断开 (剩余 {connector.count()} 个)")
 
     async def _send_full_update(self, websocket: WebSocket):
         """向单个客户端发送完整数据更新。"""
@@ -212,8 +282,17 @@ class WebAdminServer:
         self._broadcast_task = asyncio.create_task(self._broadcast_loop())
         self._ping_task = asyncio.create_task(self._background_ping_loop())
 
+        # 启动仪表盘连接器的定时广播
+        await self.dashboard_connector.start_broadcast_loop()
+        logger.info(
+            f"[仪表盘] 连接器已启动 (key={'已设置' if self.dashboard_connector.auth_key else '无需鉴权'})"
+        )
+
     async def stop(self):
         """停止 Web 服务器。"""
+        # 0. 停止仪表盘连接器
+        await self.dashboard_connector.stop()
+
         # 1. 终止后台延迟 TCP ping 检测循环
         if self._ping_task:
             self._ping_task.cancel()

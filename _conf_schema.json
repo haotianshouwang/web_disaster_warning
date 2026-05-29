@@ -298,35 +298,35 @@
     }
   },
   "earthquake_filters": {
-  "description": "🔍 地震信息过滤配置",
-  "type": "object",
-  "hint": "根据不同数据源类型使用不同的过滤器和全局关键词过滤",
-  "items": {
-    "keyword_filter": {
-      "description": "关键词过滤器",
-      "type": "object",
-      "hint": "适用于所有地震信息，支持黑名单和白名单",
-      "items": {
-        "enabled": {
-          "description": "启用关键词过滤器",
-          "type": "bool",
-          "default": false
-        },
-        "blacklist": {
-          "description": "黑名单关键词",
-          "type": "list",
-          "hint": "包含这些关键词的地震信息将被过滤",
-          "default": []
-        },
-        "whitelist": {
-          "description": "白名单关键词",
-          "type": "list",
-          "hint": "如果设置了白名单，只有包含这些关键词的地震信息才会被推送。留空则不启用白名单模式。关键词填写应以 省州市区/督道府县 的级别填写，请勿填写国家/地区名",
-          "default": []
+    "description": "🔍 地震信息过滤配置",
+    "type": "object",
+    "hint": "根据不同数据源类型使用不同的过滤器和全局关键词过滤",
+    "items": {
+      "keyword_filter": {
+        "description": "关键词过滤器",
+        "type": "object",
+        "hint": "适用于所有地震信息，支持黑名单和白名单",
+        "items": {
+          "enabled": {
+            "description": "启用关键词过滤器",
+            "type": "bool",
+            "default": false
+          },
+          "blacklist": {
+            "description": "黑名单关键词",
+            "type": "list",
+            "hint": "包含这些关键词的地震信息将被过滤",
+            "default": []
+          },
+          "whitelist": {
+            "description": "白名单关键词",
+            "type": "list",
+            "hint": "如果设置了白名单，只有包含这些关键词的地震信息才会被推送。留空则不启用白名单模式。关键词填写应以 省州市区/督道府县 的级别填写，请勿填写国家/地区名",
+            "default": []
+          }
         }
-      }
-    },
-    "intensity_filter": {
+      },
+      "intensity_filter": {
         "description": "基于震级和烈度的地震过滤器",
         "type": "object",
         "hint": "使用OR逻辑：满足 震级要求 或 满足烈度要求 即可推送",
@@ -896,6 +896,25 @@
         "type": "bool",
         "hint": "启用后将发送匿名的使用统计和错误报告，帮助改进插件。不收集任何个人信息。",
         "default": true
+      }
+    }
+  },
+  "dashboard": {
+    "description": "🖥️ 仪表盘连接器配置",
+    "type": "object",
+    "hint": "独立仪表盘前端的连接配置",
+    "items": {
+      "enabled": {
+        "description": "启用仪表盘连接器",
+        "type": "bool",
+        "default": true,
+        "hint": "允许仪表盘前端通过 /dashboard/ws 连接获取实时数据"
+      },
+      "key": {
+        "description": "连接密钥",
+        "type": "string",
+        "default": "",
+        "hint": "仪表盘前端连接时需要提供的密钥。留空则不验证密钥，任何前端均可连接"
       }
     }
   }

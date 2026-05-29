@@ -114,6 +114,19 @@ class WebSocketHub:
         if event_data:
             logger.debug(f"[灾害预警] 已推送新事件到 {self.count()} 个客户端")
 
+    async def broadcast_raw(self, message: dict[str, Any]) -> None:
+        """向所有客户端广播任意 JSON 消息（无需 data_factory）。"""
+        if not self.connections:
+            return
+        disconnected = []
+        for websocket in list(self.connections):
+            try:
+                await websocket.send_json(message)
+            except Exception:
+                disconnected.append(websocket)
+        for websocket in disconnected:
+            self.remove(websocket)
+
     async def close_all(self) -> None:
         """关闭并清空所有连接。"""
         # 遍历所有客户端进行握手关闭

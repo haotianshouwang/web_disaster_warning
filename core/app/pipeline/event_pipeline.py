@@ -64,17 +64,42 @@ class EventPipeline:
         )
 
         # 第四阶段：向管理端广播轻量摘要。
-        # 这里只发送最小必要字段，避免把完整事件对象直接传给管理端，
-        # 从而降低实时面板负载，并减少内部模型字段外露带来的耦合风险。
         if self.service.web_admin_server:
             try:
                 event_summary = {
-                    "id": envelope.id,  # 事件唯一标识
-                    "type": envelope.event_type,  # 灾害事件类型 (如 earthquake, tsunami)
-                    "source": envelope.source_id,  # 数据来源
-                    "time": datetime.now().isoformat(),  # 广播到达应用的本地时间
+                    "id": envelope.id,
+                    "type": envelope.event_type,
+                    "source": envelope.source_id,
+                    "time": datetime.now().isoformat(),
                 }
                 await self.service.web_admin_server.notify_event(event_summary)
             except Exception as ws_e:
-                # 管理端广播失败不影响主链路；用户侧推送与统计已完成，因此这里按可降级的旁路处理。
                 logger.debug(f"[灾害预警] WebSocket 通知失败: {ws_e}")
+
+        # 第五阶段：向仪表盘前端广播推送消息文本。
+        if self.service.web_admin_server and push_result:
+            try:
+                connector = self.service.web_admin_server.dashboard_connector
+                if connector.enabled:
+                    msg_text = self._build_push_message_text(event)
+                    if msg_text:
+                        await connector.broadcast_push_message(
+                            text=msg_text,
+                            event_type=envelope.event_type or "",
+                            source=envelope.source_id or "",
+                            timestamp=datetime.now().isoformat(),
+                        )
+            except Exception as push_ws_e:
+                logger.debug(f"[灾害预警] 推送消息广播失败: {push_ws_e}")
+
+    def _build_push_message_text(self, event: EventEnvelope) -> str:
+        """构建与 QQ 推送相同格式的消息文本。"""
+        try:
+            source_id = getattr(event, "source_id", "") or ""
+            message_format_config = self.service.config.get("message_format", {})
+            chain = self.service.message_manager.message_build_service.build_message(event)
+            if chain is not None and hasattr(chain, "to_plain_text"):
+                return chain.to_plain_text()
+        except Exception as e:
+            logger.debug(f"[灾害预警] 构建推送消息文本失败: {e}")
+        return ""
