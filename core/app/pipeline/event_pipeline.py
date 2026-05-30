@@ -206,15 +206,24 @@ class EventPipeline:
                 if etype_key in filter_types and not filter_types[etype_key]:
                     return
 
-            # 拼接 OneBot CQ 图片码
-            full_msg = text
+            # 拼接 OneBot CQ 图片码（防 CQ 注入：净化数据和文本）
+            import re as _re
+
+            # 移除事件文本中可能存在的伪造 CQ 码
+            safe_text = _re.sub(r'\[CQ:[^\]]*\]', '', text).strip()
+            full_msg = safe_text
             for img in images:
                 if img["type"] == "base64":
+                    # base64 仅含 [A-Za-z0-9+/=]，天然安全
                     full_msg += f"[CQ:image,file=base64://{img['data']}]"
                 elif img["type"] == "url":
-                    full_msg += f"[CQ:image,file={img['data']}]"
+                    # URL 中 ] 会提前关闭 CQ 码，移除
+                    safe_url = img["data"].replace("]", "")
+                    full_msg += f"[CQ:image,file={safe_url}]"
                 elif img["type"] == "file":
-                    full_msg += f"[CQ:image,file=file:///{img['data']}]"
+                    # 文件路径中 ] 同理
+                    safe_path = img["data"].replace("]", "")
+                    full_msg += f"[CQ:image,file=file:///{safe_path}]"
 
             # 遍历所有目标
             targets = cfg.get("targets", [])

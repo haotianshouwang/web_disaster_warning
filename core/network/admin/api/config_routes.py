@@ -49,8 +49,6 @@ def register_config_routes(app, *, config):
                 "配置结构定义文件读取失败，请联系管理员",
                 status_code=500,
             )
-                status_code=500,
-            )
 
     @app.get("/api/full-config")
     async def get_full_config():

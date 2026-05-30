@@ -78,17 +78,24 @@ def register_events_routes(app, *, disaster_service):
             event_type = type if type else None
             # 数据源筛选支持逗号分隔，便于前端一次性组合多个来源条件。
             source_filters = [s.strip() for s in source.split(",") if s.strip()]
+            # 防 DoS：限制筛选条件数量（SQLITE_MAX_VARIABLE_NUMBER=999）
+            if len(source_filters) > 50:
+                source_filters = source_filters[:50]
             max_limit = 200
             # 在接口层统一收敛分页参数，避免极端查询直接压垮数据库。
             limit = min(max(1, limit), max_limit)
-            page = max(1, page)
+            page = max(1, min(page, 10000))
+            # 防 NaN/Inf 注入 + 关键词长度限制
+            import math as _math
+            if min_magnitude is not None and (_math.isnan(min_magnitude) or _math.isinf(min_magnitude)):
+                min_magnitude = None
 
             normalized_magnitude_order = magnitude_order.lower().strip()
             if normalized_magnitude_order not in {"", "asc", "desc"}:
                 normalized_magnitude_order = ""
 
-            normalized_keyword = keyword.strip()
-            normalized_level_filter = level_filter.strip()
+            normalized_keyword = keyword.strip()[:500]  # 防 LIKE 查询 DoS
+            normalized_level_filter = level_filter.strip()[:100]
 
             # 利用 asyncio.gather 并发查询总数与分页数据，最大化 SQLite I/O 效率
             total, events = await asyncio.gather(

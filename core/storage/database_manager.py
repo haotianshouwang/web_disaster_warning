@@ -54,6 +54,9 @@ class DatabaseManager:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self.connection = await aiosqlite.connect(str(self.db_path))
             self.connection.row_factory = aiosqlite.Row
+            # 启用 WAL 模式提升并发性能 + busy_timeout 防锁
+            await self.connection.execute("PRAGMA journal_mode=WAL;")
+            await self.connection.execute("PRAGMA busy_timeout=5000;")
 
             cursor = await self.connection.cursor()
             await self._ensure_schema(cursor)

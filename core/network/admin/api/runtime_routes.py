@@ -110,6 +110,16 @@ def register_runtime_routes(app, disaster_service, config: dict[str, Any]):
             lon = float(custom_params.get("longitude", 116.4))
             magnitude = float(custom_params.get("magnitude", 5.5))
             depth = float(custom_params.get("depth", 10.0))
+            # 防 NaN/Inf 及越界值
+            import math as _math
+            if any(_math.isnan(v) or _math.isinf(v) for v in (lat, lon, magnitude, depth)):
+                return ApiResponse.error("参数包含非法数值 (NaN/Inf)", status_code=400)
+            if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+                return ApiResponse.error("经纬度超出有效范围", status_code=400)
+            if not (0 <= magnitude <= 10):
+                return ApiResponse.error("震级超出有效范围 (0-10)", status_code=400)
+            if not (0 <= depth <= 800):
+                return ApiResponse.error("深度超出有效范围 (0-800 km)", status_code=400)
             source = custom_params.get("source", test_type)
 
             manager = disaster_service.message_manager
