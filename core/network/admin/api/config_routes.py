@@ -61,12 +61,13 @@ def register_config_routes(app, *, config):
                     k: v for k, v in full["web_admin"].items() if k != "password"
                 }
             # 屏蔽通知通道敏感字段
-            sensitive = {"auth_code", "access_token", "http_server_token", "http_client_token", "ws_server_token", "ws_client_token"}
+            from ._constants import SENSITIVE_KEYS
+
             nc = full.get("notification_channels", {})
             if isinstance(nc, dict):
-                for ch in ("email", "onebot11"):
-                    if ch in nc and isinstance(nc[ch], dict):
-                        for k in sensitive:
+                for ch in nc:
+                    if isinstance(nc[ch], dict):
+                        for k in SENSITIVE_KEYS:
                             if k in nc[ch] and nc[ch][k]:
                                 nc[ch][k] = "***"
             return ApiResponse.success(full)

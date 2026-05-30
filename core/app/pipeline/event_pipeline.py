@@ -5,12 +5,16 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from urllib.parse import urlparse
 
 from astrbot.api import logger
 
 from ...domain.event_models import EventEnvelope
+
+# ── 共享常量 ──────────────────────────────────
+_EVENT_TYPE_MAP = {"地震": "earthquake", "海啸": "tsunami", "气象": "weather"}
 
 # ── SSRF 防御：内网/私有地址黑名单 ──────────────────
 _INTERNAL_HOSTS = frozenset({
@@ -48,6 +52,32 @@ class EventPipeline:
 
     def __init__(self, service):
         self.service = service
+
+    # ── 共享辅助方法 ──────────────────────────
+
+    @staticmethod
+    def _filter_by_type(cfg: dict, event_type: str) -> bool:
+        """返回 True 表示该事件类型被过滤，不应发送。"""
+        ft = cfg.get("filter_types", {})
+        if isinstance(ft, dict):
+            et_key = _EVENT_TYPE_MAP.get(event_type, event_type or "")
+            if et_key in ft and not ft[et_key]:
+                return True
+        return False
+
+    @staticmethod
+    def _build_cq_message(text: str, images: list[dict]) -> str:
+        """构建带 CQ 图片码的消息文本（防注入）。"""
+        safe_text = re.sub(r'\[CQ:[^\]]*\]', '', text).strip()
+        parts = [safe_text]
+        for img in images:
+            if img["type"] == "base64":
+                parts.append(f"[CQ:image,file=base64://{img['data']}]")
+            elif img["type"] == "url":
+                parts.append(f"[CQ:image,file={img['data'].replace(']', '')}]")
+            elif img["type"] == "file":
+                parts.append(f"[CQ:image,file=file:///{img['data'].replace(']', '')}]")
+        return "".join(parts)
 
     async def handle(self, event: EventEnvelope) -> None:
         """
@@ -141,7 +171,6 @@ class EventPipeline:
                 return "", []
             raw_text = chain.to_plain_text() if hasattr(chain, "to_plain_text") else ""
             images = list(self._iter_chain_images(chain))
-            import re
             clean_text = re.sub(r'\n?\[图片[^\]]*\]', '', raw_text).strip()
             if images:
                 logger.info(f"[管道] 消息含 {len(images)} 张图片: {[img['type'] for img in images]}")
@@ -184,62 +213,32 @@ class EventPipeline:
                     yield from EventPipeline._iter_chain_images(sub)
 
     async def _send_onebot_notification(self, event_type: str, text: str, images: list[dict]) -> None:
-        """通过 OneBot 11 发送 QQ 通知（遍历所有已启用目标，按类型过滤，含图片CQ码）。"""
+        """通过 OneBot 11 发送 QQ 通知（遍历所有已启用目标，含图片CQ码）。"""
         if not text and not images:
             return
         try:
             server = self.service.web_admin_server
-            if not server:
-                return
-            mgr = getattr(server, "onebot_manager", None)
+            mgr = getattr(server, "onebot_manager", None) if server else None
             if not mgr or not mgr.connected:
                 return
-            cfg = server.config.get("notification_channels", {}).get("onebot11", {})
+            cfg = (server.config.get("notification_channels", {}).get("onebot11", {})
+                   if server and server.config else {})
             if not isinstance(cfg, dict) or not cfg:
                 return
+            if self._filter_by_type(cfg, event_type):
+                return
 
-            # 类型过滤
-            filter_types = cfg.get("filter_types", {})
-            if isinstance(filter_types, dict):
-                mapped = {"地震": "earthquake", "海啸": "tsunami", "气象": "weather"}
-                etype_key = mapped.get(event_type, event_type or "")
-                if etype_key in filter_types and not filter_types[etype_key]:
-                    return
-
-            # 拼接 OneBot CQ 图片码（防 CQ 注入：净化数据和文本）
-            import re as _re
-
-            # 移除事件文本中可能存在的伪造 CQ 码
-            safe_text = _re.sub(r'\[CQ:[^\]]*\]', '', text).strip()
-            full_msg = safe_text
-            for img in images:
-                if img["type"] == "base64":
-                    # base64 仅含 [A-Za-z0-9+/=]，天然安全
-                    full_msg += f"[CQ:image,file=base64://{img['data']}]"
-                elif img["type"] == "url":
-                    # URL 中 ] 会提前关闭 CQ 码，移除
-                    safe_url = img["data"].replace("]", "")
-                    full_msg += f"[CQ:image,file={safe_url}]"
-                elif img["type"] == "file":
-                    # 文件路径中 ] 同理
-                    safe_path = img["data"].replace("]", "")
-                    full_msg += f"[CQ:image,file=file:///{safe_path}]"
+            full_msg = self._build_cq_message(text, images)
 
             # 遍历所有目标
             targets = cfg.get("targets", [])
-            if isinstance(cfg, dict) and not targets:
-                # 兼容旧单目标配置
-                old_type = cfg.get("target_type", "group")
+            if not targets:
                 old_id = str(cfg.get("target_id", ""))
                 if old_id:
-                    targets = [{"type": old_type, "id": old_id, "enabled": True}]
-            if not isinstance(targets, list):
-                targets = []
+                    targets = [{"type": cfg.get("target_type", "group"), "id": old_id, "enabled": True}]
 
-            for t in targets:
-                if not isinstance(t, dict):
-                    continue
-                if not t.get("enabled", True):
+            for t in (targets if isinstance(targets, list) else []):
+                if not isinstance(t, dict) or not t.get("enabled", True):
                     continue
                 tid_str = str(t.get("id", "")).strip()
                 if not tid_str:
@@ -247,10 +246,8 @@ class EventPipeline:
                 ttype = t.get("type", "group")
                 tid = int(tid_str) if tid_str.isdigit() else tid_str
                 try:
-                    if ttype == "private":
-                        result = await mgr.send_private_msg(tid, full_msg)
-                    else:
-                        result = await mgr.send_group_msg(tid, full_msg)
+                    result = await (mgr.send_private_msg(tid, full_msg) if ttype == "private"
+                                    else mgr.send_group_msg(tid, full_msg))
                     if result.get("status") == "ok" or result.get("retcode") == 0:
                         logger.info(f"[OneBot] QQ通知已发送: {ttype}/{tid}")
                     else:
@@ -261,7 +258,7 @@ class EventPipeline:
             logger.warning(f"[OneBot] QQ通知发送失败: {e}")
 
     async def _send_email_notification(self, event_type: str, text: str, images: list[dict]) -> None:
-        """通过邮件通道发送通知（遍历收件人，按类型过滤，内嵌图片）。"""
+        """通过邮件通道发送通知（遍历收件人，内嵌图片）。"""
         if not text and not images:
             return
         try:
@@ -271,16 +268,10 @@ class EventPipeline:
             cfg = server.config.get("notification_channels", {}).get("email", {})
             if not isinstance(cfg, dict) or not cfg.get("enabled"):
                 return
+            if self._filter_by_type(cfg, event_type):
+                return
 
-            # 类型过滤
-            filter_types = cfg.get("filter_types", {})
-            if isinstance(filter_types, dict):
-                mapped = {"地震": "earthquake", "海啸": "tsunami", "气象": "weather"}
-                etype_key = mapped.get(event_type, event_type or "")
-                if etype_key in filter_types and not filter_types[etype_key]:
-                    return
-
-            # 遍历收件人
+            # 解析收件人（兼容旧 receiver_emails 格式）
             targets = cfg.get("targets", [])
             if not targets:
                 old = str(cfg.get("receiver_emails", "")).strip()
@@ -299,93 +290,79 @@ class EventPipeline:
             if not sender or not auth_code:
                 return
 
-            # 构建邮件（支持内嵌图片 MIME multipart）
-            import smtplib, ssl, asyncio, base64 as _b64
+            # 构建邮件
+            import smtplib, ssl, asyncio, base64 as _b64, html as _html
             from email.mime.multipart import MIMEMultipart
             from email.mime.text import MIMEText
             from email.mime.image import MIMEImage
 
-            # 提取并解码图片
-            real_images: list[bytes] = []
-            html_img_urls: list[str] = []  # URL 图片直接嵌 <img>
-            if images:
-                logger.info(f"[邮件] 准备处理 {len(images)} 张图片: {[img['type'] for img in images]}")
-            for img in images:
-                try:
-                    if img["type"] == "base64":
-                        raw = img["data"]
-                        if "," in raw and "base64" in raw.split(",")[0]:
-                            raw = raw.split(",", 1)[1]
-                        b = _b64.b64decode(raw, validate=True)
-                        real_images.append(b)
-                        logger.debug(f"[邮件] base64解码成功: {len(b)} 字节")
-                    elif img["type"] == "url":
-                        url = img["data"]
-                        html_img_urls.append(url)
-                        logger.info(f"[邮件] URL图片: {url[:80]}...")
-                    elif img["type"] == "file":
-                        try:
-                            with open(img["data"], "rb") as f:
-                                b = f.read()
-                                real_images.append(b)
-                        except Exception as fe:
-                            logger.warning(f"[邮件] 读取文件图片失败: {fe}")
-                except Exception as de:
-                    logger.warning(f"[邮件] 图片解码失败 (type={img.get('type')}, len={len(str(img.get('data','')))}): {de}")
+            real_images, html_img_urls = self._decode_email_images(images, _b64)
+            safe_text = _html.escape(text.replace("📋", "").replace("🏷️", "").replace("📝", "").replace("⏰", ""))
+            safe_subject = _html.escape((text.strip().split("\n")[0] if text else "灾害预警")[:60])
 
-            import html as _html  # noqa: shadow imports are fine here
-
-            clean_text = text.replace("📋", "").replace("🏷️", "").replace("📝", "").replace("⏰", "")
-            # 防止 XSS：转义事件文本中的 HTML 特殊字符
-            safe_text = _html.escape(clean_text)
-            first_line_raw = text.strip().split("\n")[0] if text else "灾害预警"
-            safe_subject = _html.escape(first_line_raw[:60])  # 防止邮件头注入
-            has_any_img = real_images or html_img_urls
-
-            if has_any_img:
+            if real_images or html_img_urls:
                 msg = MIMEMultipart("related")
                 html_body = f"<pre style='font-size:14px;line-height:1.7;'>{safe_text}</pre>"
-                # 内嵌 base64 图片 (cid)
-                for i, img_bytes in enumerate(real_images):
+                for i, b in enumerate(real_images):
                     cid = f"img{i}"
                     html_body += f'<br><img src="cid:{cid}" style="max-width:100%;border-radius:8px;">'
-                    mime_img = MIMEImage(img_bytes, _subtype="png")
-                    mime_img.add_header("Content-ID", f"<{cid}>")
-                    mime_img.add_header("Content-Disposition", "inline")
-                    msg.attach(mime_img)
-                # URL 图片（仅允许 https，过滤内网地址防 SSRF）
+                    mi = MIMEImage(b, _subtype="png")
+                    mi.add_header("Content-ID", f"<{cid}>")
+                    mi.add_header("Content-Disposition", "inline")
+                    msg.attach(mi)
                 for url in html_img_urls:
                     if _is_safe_public_url(url):
                         html_body += f'<br><img src="{_html.escape(url)}" style="max-width:100%;border-radius:8px;" referrerpolicy="no-referrer">'
                 msg.attach(MIMEText(html_body, "html", "utf-8"))
             else:
-                msg = MIMEText(
-                    f"<pre style='font-size:14px;line-height:1.7;'>{safe_text}</pre>",
-                    "html", "utf-8",
-                )
+                msg = MIMEText(f"<pre style='font-size:14px;line-height:1.7;'>{safe_text}</pre>", "html", "utf-8")
 
             msg["Subject"] = f"🚨 {safe_subject}"
             msg["From"] = f"{_html.escape(sender_name)} <{sender}>"
 
             def _send():
-                if port == 465:
-                    ctx = ssl.create_default_context()
-                    with smtplib.SMTP_SSL(host, port, context=ctx, timeout=10) as srv:
-                        srv.login(sender, auth_code)
-                        srv.sendmail(sender, receivers, msg.as_string())
-                else:
-                    with smtplib.SMTP(host, port, timeout=10) as srv:
+                ctx = ssl.create_default_context() if port == 465 else None
+                cls_ = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
+                kw = {"context": ctx} if ctx else {}
+                with cls_(host, port, timeout=10, **kw) as srv:
+                    if not ctx:
                         srv.starttls(context=ssl.create_default_context())
-                        srv.login(sender, auth_code)
-                        srv.sendmail(sender, receivers, msg.as_string())
+                    srv.login(sender, auth_code)
+                    srv.sendmail(sender, receivers, msg.as_string())
 
             await asyncio.to_thread(_send)
+            ri, ui = len(real_images), len(html_img_urls)
             img_info = ""
-            if real_images or html_img_urls:
-                parts = []
-                if real_images: parts.append(f"{len(real_images)}张内嵌")
-                if html_img_urls: parts.append(f"{len(html_img_urls)}张链接")
+            if ri or ui:
+                parts = [f"{ri}张内嵌"] if ri else []
+                if ui: parts.append(f"{ui}张链接")
                 img_info = f" (含{' + '.join(parts)}图片)"
             logger.info(f"[邮件] 通知已发送: {sender} -> {len(receivers)} 人{img_info}")
         except Exception as e:
             logger.warning(f"[邮件] 发送失败: {e}")
+
+    @staticmethod
+    def _decode_email_images(images: list[dict], _b64) -> tuple[list[bytes], list[str]]:
+        """解码邮件图片：返回 (内嵌bytes列表, URL列表)。"""
+        real: list[bytes] = []
+        urls: list[str] = []
+        if images:
+            logger.info(f"[邮件] 准备处理 {len(images)} 张图片: {[img['type'] for img in images]}")
+        for img in images:
+            try:
+                if img["type"] == "base64":
+                    raw = img["data"]
+                    if "," in raw and "base64" in raw.split(",")[0]:
+                        raw = raw.split(",", 1)[1]
+                    real.append(_b64.b64decode(raw, validate=True))
+                elif img["type"] == "url":
+                    urls.append(img["data"])
+                elif img["type"] == "file":
+                    try:
+                        with open(img["data"], "rb") as f:
+                            real.append(f.read())
+                    except Exception as fe:
+                        logger.warning(f"[邮件] 读取文件图片失败: {fe}")
+            except Exception as de:
+                logger.warning(f"[邮件] 图片解码失败 (type={img.get('type')}): {de}")
+        return real, urls

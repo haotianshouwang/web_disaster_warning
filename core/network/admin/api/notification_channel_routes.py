@@ -16,11 +16,9 @@ from fastapi import Request
 from astrbot.api import logger
 
 from ..payloads.api_response import ApiResponse
+from ._constants import SENSITIVE_KEYS as _SENSITIVE_KEYS
 
 _VALID_CHANNELS = {"email", "onebot11"}
-
-# 敏感字段：列表/读取时替换为掩码
-_SENSITIVE_KEYS = {"auth_code", "access_token", "http_server_token", "http_client_token", "ws_server_token", "ws_client_token"}
 
 
 def _mask_sensitive(cfg: dict) -> dict:
