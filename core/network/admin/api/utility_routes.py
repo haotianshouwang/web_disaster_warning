@@ -33,8 +33,8 @@ def register_utility_routes(app, disaster_service, plugin_root: str):
                 disaster_service.message_logger.get_log_summary()
             )
         except Exception as e:
-            logger.error(f"[灾害预警] 获取日志失败: {e}")
-            return ApiResponse.error(str(e), status_code=500)
+            logger.error(f"[灾害预警] 获取日志失败: {e}", exc_info=True)
+            return ApiResponse.error("获取日志摘要失败", status_code=500)
 
     @app.post("/api/open-log-dir")
     async def open_log_dir():
@@ -67,8 +67,8 @@ def register_utility_routes(app, disaster_service, plugin_root: str):
                 {"success": True, "message": "已在文件浏览器中打开日志目录"}
             )
         except Exception as e:
-            logger.error(f"[灾害预警] 打开日志目录失败: {e}")
-            return ApiResponse.error(str(e), status_code=500)
+            logger.error(f"[灾害预警] 打开日志目录失败: {e}", exc_info=True)
+            return ApiResponse.error("打开日志目录失败", status_code=500)
 
     @app.post("/api/open-plugin-dir")
     async def open_plugin_dir():
@@ -96,8 +96,8 @@ def register_utility_routes(app, disaster_service, plugin_root: str):
                 {"success": True, "message": "已在文件浏览器中打开插件目录"}
             )
         except Exception as e:
-            logger.error(f"[灾害预警] 打开插件目录失败: {e}")
-            return ApiResponse.error(str(e), status_code=500)
+            logger.error(f"[灾害预警] 打开插件目录失败: {e}", exc_info=True)
+            return ApiResponse.error("打开插件目录失败", status_code=500)
 
     def _to_workspace_relative_path(path: Path) -> str:
         """将绝对路径转换为插件目录内相对路径。"""
@@ -163,6 +163,10 @@ def register_utility_routes(app, disaster_service, plugin_root: str):
         candidate = (root / normalized).resolve()
         if not candidate.is_file():
             return None
+        # 防止符号链接绕过目录限制
+        if candidate.is_symlink():
+            logger.warning(f"[灾害预警] 拒绝访问符号链接: {candidate}")
+            return None
 
         try:
             relative_path = candidate.relative_to(root)
@@ -196,8 +200,8 @@ def register_utility_routes(app, disaster_service, plugin_root: str):
                 "文档编码不受支持，仅支持 UTF-8 Markdown 文件", status_code=400
             )
         except Exception as e:
-            logger.error(f"[灾害预警] 读取 Markdown 文档失败: {e}")
-            return ApiResponse.error(str(e), status_code=500)
+            logger.error(f"[灾害预警] 读取 Markdown 文档失败: {e}", exc_info=True)
+            return ApiResponse.error("读取文档失败", status_code=500)
 
         return ApiResponse.success(
             {

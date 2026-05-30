@@ -235,10 +235,11 @@ async def _test_email(cfg: dict) -> ApiResponse:
     except smtplib.SMTPAuthenticationError:
         return ApiResponse.error("SMTP 认证失败，请检查邮箱地址和授权码")
     except smtplib.SMTPConnectError:
-        return ApiResponse.error(f"无法连接 SMTP 服务器 {host}:{port}")
+        logger.warning(f"[通知通道] 邮件测试无法连接: {host}:{port}")
+        return ApiResponse.error("无法连接 SMTP 服务器，请检查地址和端口")
     except Exception as e:
         logger.warning(f"[通知通道] 邮件测试失败: {e}")
-        return ApiResponse.error(f"发送失败: {e}")
+        return ApiResponse.error("发送失败，请检查配置")
 
 
 async def _test_onebot11(cfg: dict, app=None) -> ApiResponse:

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import traceback
 from typing import Any
 
 from astrbot.api import logger
@@ -43,10 +42,13 @@ def register_config_routes(app, *, config):
             )
         except Exception as e:
             logger.error(
-                f"[灾害预警] 获取配置结构定义失败，文件路径为 {schema_path}，错误为 {e}"
+                f"[灾害预警] 获取配置结构定义失败，文件路径为 {schema_path}，错误为 {e}",
+                exc_info=True,
             )
             return ApiResponse.error(
-                f"{str(e)}, path: {schema_path}, trace: {traceback.format_exc()}",
+                "配置结构定义文件读取失败，请联系管理员",
+                status_code=500,
+            )
                 status_code=500,
             )
 
