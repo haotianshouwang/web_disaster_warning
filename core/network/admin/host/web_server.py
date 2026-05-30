@@ -131,11 +131,11 @@ class WebAdminServer:
 
             return await call_next(request)
 
-        # 支持跨域访问
+        # 跨域访问（生产部署应限制为具体前端域名）
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
-            allow_credentials=True,
+            allow_credentials=False,
             allow_methods=["*"],
             allow_headers=["*"],
         )

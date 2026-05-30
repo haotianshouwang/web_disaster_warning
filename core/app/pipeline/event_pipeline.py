@@ -6,10 +6,36 @@
 from __future__ import annotations
 
 from datetime import datetime
+from urllib.parse import urlparse
 
 from astrbot.api import logger
 
 from ...domain.event_models import EventEnvelope
+
+# ── SSRF 防御：内网/私有地址黑名单 ──────────────────
+_INTERNAL_HOSTS = frozenset({
+    "127.0.0.1", "localhost", "0.0.0.0", "::1",
+})
+_INTERNAL_PREFIXES = ("169.254.", "10.", "172.16.", "172.17.", "172.18.",
+                      "172.19.", "172.20.", "172.21.", "172.22.", "172.23.",
+                      "172.24.", "172.25.", "172.26.", "172.27.", "172.28.",
+                      "172.29.", "172.30.", "172.31.", "192.168.")
+
+
+def _is_safe_public_url(url: str) -> bool:
+    """防止 SSRF：只允许公网 https URL，拦截内网地址。"""
+    try:
+        p = urlparse(url)
+        if p.scheme not in ("https", "http"):
+            return False
+        h = (p.hostname or "").lower()
+        if not h or h in _INTERNAL_HOSTS:
+            return False
+        if h.startswith(_INTERNAL_PREFIXES):
+            return False
+        return True
+    except Exception:
+        return False
 
 
 class EventPipeline:
@@ -298,33 +324,39 @@ class EventPipeline:
                 except Exception as de:
                     logger.warning(f"[邮件] 图片解码失败 (type={img.get('type')}, len={len(str(img.get('data','')))}): {de}")
 
+            import html as _html  # noqa: shadow imports are fine here
+
             clean_text = text.replace("📋", "").replace("🏷️", "").replace("📝", "").replace("⏰", "")
-            first_line = text.strip().split("\n")[0] if text else "灾害预警"
+            # 防止 XSS：转义事件文本中的 HTML 特殊字符
+            safe_text = _html.escape(clean_text)
+            first_line_raw = text.strip().split("\n")[0] if text else "灾害预警"
+            safe_subject = _html.escape(first_line_raw[:60])  # 防止邮件头注入
             has_any_img = real_images or html_img_urls
 
             if has_any_img:
                 msg = MIMEMultipart("related")
-                html = f"<pre style='font-size:14px;line-height:1.7;'>{clean_text}</pre>"
+                html_body = f"<pre style='font-size:14px;line-height:1.7;'>{safe_text}</pre>"
                 # 内嵌 base64 图片 (cid)
                 for i, img_bytes in enumerate(real_images):
                     cid = f"img{i}"
-                    html += f'<br><img src="cid:{cid}" style="max-width:100%;border-radius:8px;">'
+                    html_body += f'<br><img src="cid:{cid}" style="max-width:100%;border-radius:8px;">'
                     mime_img = MIMEImage(img_bytes, _subtype="png")
                     mime_img.add_header("Content-ID", f"<{cid}>")
                     mime_img.add_header("Content-Disposition", "inline")
                     msg.attach(mime_img)
-                # URL 图片直接嵌 <img src>
+                # URL 图片（仅允许 https，过滤内网地址防 SSRF）
                 for url in html_img_urls:
-                    html += f'<br><img src="{url}" style="max-width:100%;border-radius:8px;" referrerpolicy="no-referrer">'
-                msg.attach(MIMEText(html, "html", "utf-8"))
+                    if _is_safe_public_url(url):
+                        html_body += f'<br><img src="{_html.escape(url)}" style="max-width:100%;border-radius:8px;" referrerpolicy="no-referrer">'
+                msg.attach(MIMEText(html_body, "html", "utf-8"))
             else:
                 msg = MIMEText(
-                    f"<pre style='font-size:14px;line-height:1.7;'>{clean_text}</pre>",
+                    f"<pre style='font-size:14px;line-height:1.7;'>{safe_text}</pre>",
                     "html", "utf-8",
                 )
 
-            msg["Subject"] = f"🚨 {first_line[:60]}"
-            msg["From"] = f"{sender_name} <{sender}>"
+            msg["Subject"] = f"🚨 {safe_subject}"
+            msg["From"] = f"{_html.escape(sender_name)} <{sender}>"
 
             def _send():
                 if port == 465:
