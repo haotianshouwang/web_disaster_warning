@@ -37,7 +37,7 @@ class DisasterServiceLifecycleService:
                 )  # 服务启动UTC时间戳
                 logger.info("[灾害预警] 正在启动灾害预警服务...")
 
-                # 启动顺序刻意遵循“先恢复状态，再开放接入”的原则：
+                # 启动顺序刻意遵循"先恢复状态，再开放接入"的原则：
                 # 1. 初始化统计存储；
                 # 2. 恢复地震列表缓存；
                 # 3. 恢复地震预警查询缓存。
@@ -48,7 +48,7 @@ class DisasterServiceLifecycleService:
                 self.service.cache_service.load_earthquake_lists_cache()  # 载入本地地震列表缓存
                 self.service.cache_service.load_eew_query_cache()  # 载入本地地震预警状态缓存
 
-                # 运行时任务按“WebSocket 管理器 -> 建立连接 -> 定时 HTTP 拉取 -> 清理任务”启动。
+                # 运行时任务按"WebSocket 管理器 -> 建立连接 -> 定时 HTTP 拉取 -> 清理任务"启动。
                 # 这个顺序可以确保底层接入设施先就绪，再逐层开启依赖它们的上层任务。
                 await self.service.ws_manager.start()  # 开启 WebSocket 底层支持
                 await (
@@ -87,16 +87,20 @@ class DisasterServiceLifecycleService:
     async def cancel_and_wait(self, tasks: list[asyncio.Task]) -> None:
         """
         取消并等待指定的 asyncio.Task 任务列表结束。
-
-        Args:
-            tasks (list[asyncio.Task]): 需要强制回收的任务句柄列表
+        每批任务最多等待 5 秒，超时强行跳过防止退出时卡死。
         """
-        # 这里刻意不区分任务类型，统一采用“先发取消，再集中等待”的回收方式，
-        # 以便在停机链路中复用同一套任务收尾逻辑。
         for task in tasks:
-            task.cancel()  # 触发任务取消
+            task.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)  # 并发等待任务安全退出
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=5,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[灾害预警] 等待 {len(tasks)} 个任务取消超时(5s)，强制跳过"
+                )
 
     async def stop(self) -> None:
         """异步停止灾害服务，回收后台协程任务并保存缓存文件。"""
@@ -109,7 +113,7 @@ class DisasterServiceLifecycleService:
             try:
                 logger.info("[灾害预警] 正在停止灾害预警服务...")
                 was_running = self.service.running
-                # 提前将运行标记切为 False，阻止新任务继续按“服务运行中”路径工作。
+                # 提前将运行标记切为 False，阻止新任务继续按"服务运行中"路径工作。
                 self.service.running = False
 
                 # 只有服务曾实际运行过，缓存状态才有落盘意义；
@@ -118,7 +122,7 @@ class DisasterServiceLifecycleService:
                     self.service.cache_service.save_earthquake_lists_cache()  # 保存地震列表到本地
                     self.service.cache_service.save_eew_query_cache()  # 保存地震预警状态到本地
 
-                # 停机顺序遵循“先停上层任务，再关底层资源”：
+                # 停机顺序遵循"先停上层任务，再关底层资源"：
                 # 这样可以避免任务还在执行时，其依赖的连接、抓取器或数据库已被提前关闭。
                 connection_tasks = list(self.service.connection_tasks)
                 await self.cancel_and_wait(
@@ -159,7 +163,7 @@ class DisasterServiceLifecycleService:
                     await (
                         self.service.statistics_manager.db.close()
                     )  # 关闭 SQLite 数据库连接句柄
-                    # 重载插件后需要允许统计管理器重新建库/重载，否则会保留“已初始化”假状态。
+                    # 重载插件后需要允许统计管理器重新建库/重载，否则会保留"已初始化"假状态。
                     self.service.statistics_manager._db_initialized = False
 
                 logger.info("[灾害预警] 灾害预警服务已停止")
@@ -170,5 +174,5 @@ class DisasterServiceLifecycleService:
                         e, module="core.disaster_service.stop"
                     )
             finally:
-                # 无论停止是否成功，都要清除“正在停止”标记，防止后续流程被永久阻塞。
+                # 无论停止是否成功，都要清除"正在停止"标记，防止后续流程被永久阻塞。
                 self.service._stopping = False

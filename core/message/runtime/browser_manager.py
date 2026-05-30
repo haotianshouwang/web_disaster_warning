@@ -547,13 +547,17 @@ class BrowserManager:
 
         # 步骤 1: 关闭页面池中的所有页面
         try:
-            while not self._page_pool.empty():
-                try:
-                    page = self._page_pool.get_nowait()
-                    await page.close()
-                except Exception as e:
-                    cleanup_errors.append(f"关闭页面失败: {e}")
-                    logger.debug(f"[灾害预警] 关闭页面失败: {e}")
+            import asyncio as _asyncio
+            async def _close_all_pages():
+                while not self._page_pool.empty():
+                    try:
+                        page = self._page_pool.get_nowait()
+                        await page.close()
+                    except Exception:
+                        pass
+            await _asyncio.wait_for(_close_all_pages(), timeout=5)
+        except asyncio.TimeoutError:
+            logger.warning("[灾害预警] 关闭页面池超时(5s)，跳过")
         except Exception as e:
             cleanup_errors.append(f"清理页面池失败: {e}")
             logger.warning(f"[灾害预警] 清理页面池时发生异常: {e}")
@@ -562,8 +566,12 @@ class BrowserManager:
         # 步骤 2: 停止 Playwright（先停框架，内部会处理浏览器）
         try:
             if self._playwright:
-                await self._playwright.stop()
+                import asyncio as _asyncio
+                await _asyncio.wait_for(self._playwright.stop(), timeout=5)
                 self._playwright = None
+        except asyncio.TimeoutError:
+            logger.warning("[灾害预警] 停止 Playwright 超时(5s)，跳过")
+            self._playwright = None
         except Exception as e:
             cleanup_errors.append(f"停止 Playwright 失败: {e}")
             logger.warning(f"[灾害预警] 停止 Playwright 失败: {e}")
@@ -572,8 +580,12 @@ class BrowserManager:
         # 步骤 3: 关闭浏览器（兜底）
         try:
             if self._browser:
-                await self._browser.close()
+                import asyncio as _asyncio
+                await _asyncio.wait_for(self._browser.close(), timeout=5)
                 self._browser = None
+        except asyncio.TimeoutError:
+            logger.warning("[灾害预警] 关闭浏览器超时(5s)，跳过")
+            self._browser = None
         except Exception as e:
             cleanup_errors.append(f"关闭浏览器失败: {e}")
             logger.warning(f"[灾害预警] 关闭浏览器失败: {e}")
