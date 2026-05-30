@@ -84,11 +84,10 @@ class EventPipeline:
             except Exception as ws_e:
                 logger.debug(f"[灾害预警] WebSocket 通知失败: {ws_e}")
 
-        # 第五-六阶段：仪表盘 + QQ + 邮件
-        should_notify = push_result if target_sessions else True
+        # 第五-六阶段：仪表盘 + QQ + 邮件（全量推送，跟 CLI 一样）
         msg_text, msg_images = await self._build_push_message(event)
 
-        if msg_text and self.service.config.get("enabled", True) and should_notify:
+        if (msg_text or msg_images) and self.service.config.get("enabled", True):
             if self.service.web_admin_server:
                 try:
                     connector = self.service.web_admin_server.dashboard_connector
@@ -105,6 +104,8 @@ class EventPipeline:
 
             await self._send_onebot_notification(envelope.event_type, msg_text, msg_images)
             await self._send_email_notification(envelope.event_type, msg_text, msg_images)
+            if msg_images:
+                logger.info(f"[管道] 推送完成: {envelope.event_type}/{envelope.source_id}, 含{len(msg_images)}图 → web/QQ/邮件")
 
     async def _build_push_message(self, event: EventEnvelope) -> tuple[str, list[dict]]:
         """异步构建推送消息 (纯文本, 图片列表)。包含卡片渲染、地图、图标。"""
@@ -114,11 +115,16 @@ class EventPipeline:
                 return "", []
             raw_text = chain.to_plain_text() if hasattr(chain, "to_plain_text") else ""
             images = list(self._iter_chain_images(chain))
-            # 去除 to_plain_text 生成的 [图片: ...] 占位符
             import re
             clean_text = re.sub(r'\n?\[图片[^\]]*\]', '', raw_text).strip()
             if images:
                 logger.info(f"[管道] 消息含 {len(images)} 张图片: {[img['type'] for img in images]}")
+            # 纯图片消息（如 Global Quake 卡片）——用同步构建补上文字
+            if not clean_text and images:
+                sync_chain = self.service.message_manager.message_build_service.build_message(event)
+                if sync_chain and hasattr(sync_chain, "to_plain_text"):
+                    sync_text = sync_chain.to_plain_text()
+                    clean_text = re.sub(r'\n?\[图片[^\]]*\]', '', sync_text).strip()
             return clean_text, images
         except Exception as e:
             logger.debug(f"[灾害预警] 构建推送消息失败: {e}")
@@ -153,7 +159,7 @@ class EventPipeline:
 
     async def _send_onebot_notification(self, event_type: str, text: str, images: list[dict]) -> None:
         """通过 OneBot 11 发送 QQ 通知（遍历所有已启用目标，按类型过滤，含图片CQ码）。"""
-        if not text:
+        if not text and not images:
             return
         try:
             server = self.service.web_admin_server
@@ -221,7 +227,7 @@ class EventPipeline:
 
     async def _send_email_notification(self, event_type: str, text: str, images: list[dict]) -> None:
         """通过邮件通道发送通知（遍历收件人，按类型过滤，内嵌图片）。"""
-        if not text:
+        if not text and not images:
             return
         try:
             server = self.service.web_admin_server

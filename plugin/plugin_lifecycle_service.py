@@ -138,7 +138,11 @@ class PluginLifecycleService:
 
         from ..core.app.disaster_service import stop_disaster_service
 
-        await stop_disaster_service()
+        import asyncio as _asyncio
+        try:
+            await _asyncio.wait_for(stop_disaster_service(), timeout=10)
+        except _asyncio.TimeoutError:
+            logger.warning("[灾害预警] 停止服务超时，强制继续")
 
         if (
             self.plugin.disaster_service

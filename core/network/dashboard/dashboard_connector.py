@@ -9,13 +9,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from datetime import datetime
 from typing import Any
 
 from astrbot.api import logger
-
-_MAX_HISTORY = 50
 _SNAPSHOT_EVENTS_LIMIT = 50
 _TREND_HOURS = 24
 _HEATMAP_DAYS = 180
@@ -32,7 +29,6 @@ class DashboardConnector:
         self._key: str = ""
         self._enabled: bool = True
         self._broadcast_task: asyncio.Task | None = None
-        self._message_history: deque[dict] = deque(maxlen=_MAX_HISTORY)
 
     # ── 配置 ──────────────────────────────────
 
@@ -86,10 +82,9 @@ class DashboardConnector:
             self.remove(ws)
 
     async def send_full_update(self, websocket) -> None:
-        """向新客户端发送全量快照 + 持久化推送历史。"""
+        """向新客户端发送全量快照 + DB 推送历史。"""
         data = await self._build_snapshot()
-        # 内存历史 + 文件持久化历史合并，取最新 100 条
-        data["recent_messages"] = self._load_persisted_messages()
+        data["recent_messages"] = await self._push_msg_db_load()
         await self._send_json(websocket, {"type": "full_update", "data": data})
 
     async def broadcast_snapshot(self) -> None:
@@ -110,7 +105,7 @@ class DashboardConnector:
         self, text: str, event_type: str = "", source: str = "", timestamp: str = "",
         images: list | None = None,
     ) -> None:
-        """推送预警消息到仪表盘，并写入历史缓存+持久化文件。images: [{\"type\":\"base64\"/\"url\",\"data\":\"...\"}]"""
+        """推送预警消息到仪表盘，写入 events.db 统一存储。images: [{\"type\":\"base64\"/\"url\",\"data\":\"...\"}]"""
         ts = timestamp or datetime.now().isoformat()
         msg = {
             "type": "push_message",
@@ -120,8 +115,7 @@ class DashboardConnector:
             "timestamp": ts,
             "images": images or [],
         }
-        self._message_history.append(dict(msg))
-        self._persist_message(dict(msg))
+        await self._push_msg_db_insert(dict(msg))
         await self.send_to_all(msg)
 
     async def send_event(self, websocket, page: int, limit: int,
@@ -148,7 +142,7 @@ class DashboardConnector:
                 except (ValueError, TypeError):
                     mag = None
 
-            safe_limit = max(1, min(limit, 200))
+            safe_limit = max(1, min(limit, 9999))
             safe_page = max(1, page)
 
             events_raw = await db.get_events_paginated(
@@ -302,78 +296,60 @@ class DashboardConnector:
 
         return data
 
-    # ── 持久化 ────────────────────────────────
+    # ── 推送消息 DB 存储（复用 events.db） ──
 
-    def _persist_message(self, msg: dict) -> None:
-        """将推送消息追加写入本地 JSON 文件。"""
-        try:
-            import json
-            path = self._get_persist_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            entry = {"text": msg.get("text", ""), "event_type": msg.get("event_type", ""),
-                     "source": msg.get("source", ""), "timestamp": msg.get("timestamp", "")}
-            lines = []
-            if path.exists():
-                lines = path.read_text(encoding="utf-8").strip().split("\n")
-            lines.append(json.dumps(entry, ensure_ascii=False))
-            # 仅保留最近 200 条
-            if len(lines) > 200:
-                lines = lines[-200:]
-            path.write_text("\n".join(lines), encoding="utf-8")
-        except Exception as e:
-            logger.debug(f"[仪表盘] 持久化推送消息失败: {e}")
+    async def _push_msg_db(self):
+        """获取推送消息表连接，自动建表。"""
+        svc = self._disaster_service
+        if svc and hasattr(svc, "statistics_manager"):
+            db = getattr(svc.statistics_manager, "db", None)
+            if db and db.connection:
+                await db.connection.execute(
+                    "CREATE TABLE IF NOT EXISTS push_messages ("
+                    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    "  text TEXT, event_type TEXT, source TEXT, timestamp TEXT,"
+                    "  images_json TEXT"
+                    ")"
+                )
+                await db.connection.commit()
+                return db.connection
+        return None
 
-    def _load_persisted_messages(self) -> list[dict]:
-        """加载内存+文件历史合并去重，按时间倒序取最新。"""
-        _MAX = 100
-        seen = set()
-        merged = list(self._message_history)
-        for m in merged:
-            seen.add((m.get("text", ""), m.get("timestamp", "")))
-        try:
-            path = self._get_persist_path()
-            if path.exists():
-                import json
-                for line in path.read_text(encoding="utf-8").strip().split("\n"):
-                    if not line.strip():
-                        continue
-                    try:
-                        entry = json.loads(line)
-                        key = (entry.get("text", ""), entry.get("timestamp", ""))
-                        if key not in seen:
-                            seen.add(key)
-                            merged.append(entry)
-                    except json.JSONDecodeError:
-                        pass
-        except Exception as e:
-            logger.debug(f"[仪表盘] 加载持久化推送历史失败: {e}")
-        merged.sort(key=lambda m: str(m.get("timestamp", "")), reverse=True)
-        return merged[:_MAX]
+    async def _push_msg_db_insert(self, msg: dict) -> None:
+        conn = await self._push_msg_db()
+        if conn:
+            import json as _json
+            try:
+                await conn.execute(
+                    "INSERT INTO push_messages (text,event_type,source,timestamp,images_json) VALUES (?,?,?,?,?)",
+                    (msg.get("text",""), msg.get("event_type",""), msg.get("source",""),
+                     msg.get("timestamp",""), _json.dumps(msg.get("images",[]), ensure_ascii=False))
+                )
+                await conn.execute("DELETE FROM push_messages WHERE id NOT IN (SELECT id FROM push_messages ORDER BY id DESC LIMIT 200)")
+                await conn.commit()
+            except Exception as e:
+                logger.debug(f"[仪表盘] DB写入推送消息失败: {e}")
 
-    def _get_persist_path(self):
-        from pathlib import Path
-        try:
-            from astrbot.api.star import StarTools
-            d = StarTools.get_data_dir("astrbot_plugin_disaster_warning")
-        except Exception:
-            d = Path("./data/plugin_data")
-        return Path(d) / "dashboard_messages.jsonl"
-
-    def _truncate_persist_file(self) -> None:
-        """启动时清空持久化文件，避免重启回放旧消息。"""
-        try:
-            path = self._get_persist_path()
-            if path.exists():
-                path.write_text("", encoding="utf-8")
-                logger.debug(f"[仪表盘] 已清空持久化消息文件: {path}")
-        except Exception:
-            pass
+    async def _push_msg_db_load(self) -> list[dict]:
+        conn = await self._push_msg_db()
+        if conn:
+            import json as _json
+            try:
+                c = await conn.execute("SELECT * FROM push_messages ORDER BY id DESC LIMIT 100")
+                rows = await c.fetchall()
+                return [
+                    {"type": "push_message", "text": r["text"], "event_type": r["event_type"],
+                     "source": r["source"], "timestamp": r["timestamp"],
+                     "images": _json.loads(r["images_json"] or "[]")}
+                    for r in rows
+                ]
+            except Exception as e:
+                logger.debug(f"[仪表盘] DB读取推送消息失败: {e}")
+        return []
 
     # ── 生命周期 ──────────────────────────────
 
     async def start_broadcast_loop(self) -> None:
-        # 启动时清理旧的持久化消息文件（避免重启回放历史）
-        self._truncate_persist_file()
         if self._broadcast_task is not None:
             return
         self._broadcast_task = asyncio.create_task(self._broadcast_loop())

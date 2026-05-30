@@ -559,7 +559,9 @@ async def _standalone_main(args: argparse.Namespace) -> None:
     # 9. 清理
     logger.info("[灾害预警] 正在停止服务...")
     try:
-        await plugin.terminate()
+        await asyncio.wait_for(plugin.terminate(), timeout=15)
+    except asyncio.TimeoutError:
+        logger.warning("[灾害预警] 停止超时，强制退出")
     except Exception:
         pass
     logger.info("[灾害预警] 服务已停止")
