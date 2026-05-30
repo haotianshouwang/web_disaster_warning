@@ -11,9 +11,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from jinja2 import Environment
-
-_JINJA2_ENV = Environment(autoescape=True)
+from jinja2 import Template
 
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
@@ -98,7 +96,7 @@ class GlobalQuakeCardBuilder:
             with open(map_helper_path, encoding="utf-8") as helper_file:
                 context["map_render_helper_js"] = helper_file.read()
 
-            template = _JINJA2_ENV.from_string(template_content)
+            template = Template(template_content)
             html_content = template.render(**context)
 
             card_cache_key = cache_key_builder(

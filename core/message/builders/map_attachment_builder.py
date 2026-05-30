@@ -9,9 +9,7 @@ import os
 import time
 from typing import Any
 
-from jinja2 import Environment
-
-_JINJA2_ENV = Environment(autoescape=True)
+from jinja2 import Template
 
 from astrbot.api import logger
 
@@ -90,7 +88,7 @@ class MapAttachmentBuilder:
                 "map_render_helper_js": map_render_helper_js,
             }
 
-            template = _JINJA2_ENV.from_string(template_content)
+            template = Template(template_content)
             html_content = template.render(**context)
             image_filename = f"map_{lat}_{lon}_{int(time.time())}.png"
             image_path = os.path.join(self.temp_dir, image_filename)

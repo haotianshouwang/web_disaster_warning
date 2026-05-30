@@ -8,10 +8,7 @@ from __future__ import annotations
 import os
 import time
 
-from jinja2 import Environment
-
-# 共享渲染环境（autoescape 防 XSS，模板已全局共用）
-_JINJA2_ENV = Environment(autoescape=True)
+from jinja2 import Template
 
 from astrbot.api import logger
 
@@ -60,7 +57,7 @@ class CardMessageBuilder:
                 "footer_text": footer_text,
             }
 
-            template = _JINJA2_ENV.from_string(template_content)
+            template = Template(template_content)
             html_content = template.render(**context)
 
             # 输出文件名只要求本次渲染基本唯一，真正去重由上层决定是否复用结果。
