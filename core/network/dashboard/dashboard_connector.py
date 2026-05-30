@@ -378,5 +378,4 @@ class DashboardConnector:
             except Exception:
                 pass
         self._connections.clear()
-        self._message_history.clear()
         logger.info("[仪表盘] 连接器已停止")
